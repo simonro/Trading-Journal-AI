@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, TrendingUp, BarChart2, BookOpen, Plus, ChevronDown,
   CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, Settings as SettingsIcon,
+  Scale,
 } from 'lucide-react';
 import { accountsApi } from '../api';
 import aiJournalLogo from '../assets/ai-journal-logo.png';
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'day-review', label: 'Day Review', icon: CalendarCheck },
   { id: 'reports', label: 'Reports', icon: BarChart2 },
+  { id: 'reconciliation', label: 'Reconciliation', icon: Scale },
   { id: 'diary', label: 'Diary', icon: BookOpen },
   { id: 'help', label: 'Help', icon: HelpCircle },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
