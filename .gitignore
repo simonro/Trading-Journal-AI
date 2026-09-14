@@ -24,5 +24,13 @@ build/
 uploads/
 backend/uploads/
 
+# encrypted backups and TLS material - never commit these
+backups/
+backend/backups/
+certs/
+backend/certs/
+*.pem
+*.tar.gz.enc
+
 # windows shortcuts
 *.lnk

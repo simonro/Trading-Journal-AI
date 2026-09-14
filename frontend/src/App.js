@@ -14,6 +14,7 @@ import DailySummary from './components/DailySummary';
 import Reports from './components/Reports';
 import Help from './components/Help';
 import Settings from './components/Settings';
+import Reconciliation from './components/Reconciliation';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
@@ -142,6 +143,7 @@ export default function App() {
           />
         )}
         {page === 'reports' && <Reports accountId={selectedAccountId} />}
+        {page === 'reconciliation' && <Reconciliation accountId={selectedAccountId} />}
         {page === 'help' && <Help />}
         {page === 'settings' && <Settings />}
       </main>

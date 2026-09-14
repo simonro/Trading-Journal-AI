@@ -29,6 +29,10 @@ from ai_analysis import (
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
+from lot_matching import router as lot_matching_router, init_lot_tables, recalc_all_lots, recalc_trade_lots, get_global_method
+from backup import router as backup_router, init_backup_tables
+from reconciliation import router as reconciliation_router, init_reconciliation_tables
+from tls_settings import router as tls_router
 
 load_dotenv()
 
@@ -41,10 +45,27 @@ async def lifespan(app: FastAPI):
     _conn = get_db()
     try:
         init_library_tables(_conn)
+        init_lot_tables(_conn)
+        init_backup_tables(_conn)
+        init_reconciliation_tables(_conn)
+        recalc_all_lots(_conn)
     finally:
         _conn.close()
     Path(UPLOAD_DIR).mkdir(exist_ok=True)
+
+    scheduler = None
+    if os.getenv("BACKUP_PASSPHRASE"):
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from backup import run_due_scheduled_backups
+
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(lambda: run_due_scheduled_backups(get_db), "cron", minute="*")
+        scheduler.start()
+
     yield
+
+    if scheduler:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Trading Journal AI API", lifespan=lifespan)
@@ -70,6 +91,10 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
+app.include_router(lot_matching_router)
+app.include_router(backup_router)
+app.include_router(reconciliation_router)
+app.include_router(tls_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
@@ -433,6 +458,17 @@ async def import_csv(
         conn.rollback()
         raise
 
+    if imported:
+        global_method = get_global_method(conn)
+        for trade in trades:
+            trade_row = conn.execute(
+                "SELECT * FROM trades WHERE trade_group=? AND account_id=?",
+                (trade['trade_group'], account_id),
+            ).fetchone()
+            if trade_row:
+                recalc_trade_lots(conn, dict(trade_row), global_method)
+        conn.commit()
+
     return {
         "imported": imported,
         "skipped": skipped,
@@ -599,6 +635,8 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (cursor.lastrowid,)).fetchone()
+    recalc_trade_lots(conn, dict(row), get_global_method(conn))
+    conn.commit()
     return row_to_dict(row)
 
 
@@ -626,6 +664,8 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    recalc_trade_lots(conn, dict(row), get_global_method(conn))
+    conn.commit()
     return row_to_dict(row)
 
 
@@ -672,6 +712,9 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         "UPDATE trades SET executions=?, gross_pnl=?, net_pnl=?, commissions=?, date=? WHERE id=?",
         (json.dumps(execs), gross_pnl, net_pnl, commissions, trade_date, trade_id)
     )
+    conn.commit()
+    updated_row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    recalc_trade_lots(conn, dict(updated_row), get_global_method(conn))
     conn.commit()
     return row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
 
