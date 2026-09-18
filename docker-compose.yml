@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - backend/.env
+    environment:
+      - FRONTEND_ORIGINS=${FRONTEND_ORIGINS:-}
+    volumes:
+      - backend_data:/app/backend/data
+      - backend_uploads:/app/backend/uploads
+      - backend_backups:/app/backend/backups
+      - backend_certs:/app/backend/certs
+    ports:
+      - "8010:8010"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8010}
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    depends_on:
+      - backend
+
+  # Optional: terminate TLS for both services behind one HTTPS port on the VM,
+  # instead of (or in addition to) uploading a cert directly to the backend.
+  # Run with: docker compose --profile proxy up -d
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./deploy/nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - backend_certs:/etc/nginx/certs:ro
+
+volumes:
+  backend_data:
+  backend_uploads:
+  backend_backups:
+  backend_certs:

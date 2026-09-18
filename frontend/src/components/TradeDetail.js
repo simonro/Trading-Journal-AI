@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
-import { tradesApi, chartApi } from '../api';
+import { tradesApi, chartApi, lotMethodApi } from '../api';
 import TradingChart from './TradingChart';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
 
@@ -189,7 +189,7 @@ function TagBadge({ tag, onDelete }) {
 
 // ── What If helpers ───────────────────────────────────────────────────────────
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'Executions', 'What If'];
+const TABS = ['Stats', 'Strategy', 'Tags', 'Executions', 'Tax Lots', 'What If'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
@@ -320,6 +320,34 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   // What If
   const [whatIfBars, setWhatIfBars]       = useState(null);
   const [whatIfLoading, setWhatIfLoading] = useState(false);
+
+  // Tax lots (FIFO/LIFO breakdown, plus per-trade method override)
+  const [lots, setLots]                 = useState(null);
+  const [lotsError, setLotsError]       = useState(null);
+  const [lotMethodBusy, setLotMethodBusy] = useState(false);
+
+  const loadLots = () => {
+    lotMethodApi.getTradeLots(trade.id)
+      .then(r => { setLots(r.data); setLotsError(null); })
+      .catch(e => setLotsError(e?.response?.data?.detail || e.message));
+  };
+
+  useEffect(() => {
+    if (tab === 'Tax Lots' && lots?.trade_id !== trade.id) loadLots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, trade.id]);
+
+  const setTradeLotMethod = async (method) => {
+    setLotMethodBusy(true);
+    try {
+      await lotMethodApi.setTradeMethod(trade.id, method);
+      loadLots();
+    } catch (e) {
+      setLotsError(e?.response?.data?.detail || e.message);
+    } finally {
+      setLotMethodBusy(false);
+    }
+  };
 
   // Stats edit
   const [editingStats, setEditingStats]   = useState(false);
@@ -986,6 +1014,64 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                       <button type="button" onClick={() => { setShowAddExec(false); setExecForm(EMPTY_EXEC); setExecError(null); }} className="btn btn-ghost btn-sm">Cancel</button>
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Tax Lots tab ──────────────────────────────────────────── */}
+            {tab === 'Tax Lots' && (
+              <div style={{ paddingTop: 8 }}>
+                {lotsError && <div className="notice neg" role="alert" style={{ marginBottom: 10 }}>{lotsError}</div>}
+                {!lots && !lotsError && <div className="skeleton" style={{ height: 160 }} />}
+                {lots && (
+                  <>
+                    <div className="settings-form" style={{ padding: 0, border: 0, background: 'none', marginBottom: 12 }}>
+                      <label style={{ flex: '0 0 220px' }}>
+                        <span className="field-label">Lot matching method for this trade</span>
+                        <select
+                          value={lots.override || ''}
+                          disabled={lotMethodBusy}
+                          onChange={e => setTradeLotMethod(e.target.value || null)}
+                        >
+                          <option value="">Use account default ({lots.global_method})</option>
+                          <option value="FIFO">FIFO (override)</option>
+                          <option value="LIFO">LIFO (override)</option>
+                        </select>
+                      </label>
+                      <div className="text-muted" style={{ fontSize: 13, alignSelf: 'center' }}>
+                        Effective method: <strong>{lots.effective_method}</strong>. Overriding a single trade is
+                        for when your broker lets you pick which lot to sell (specific identification); it
+                        recalculates only this trade.
+                      </div>
+                    </div>
+
+                    <div className="scroll-x" style={{ margin: '0 -20px' }}>
+                      <table style={{ minWidth: 620 }}>
+                        <thead>
+                          <tr>
+                            {['Opened', 'Closed', 'Qty', 'Open px', 'Close px', 'Comm.', 'Realized P&L', 'Term'].map((h, hi) => (
+                              <th key={h} className={hi < 2 ? undefined : 'num'} style={{ paddingLeft: hi === 0 ? 20 : undefined, paddingRight: hi === 7 ? 20 : undefined }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {lots.lots.map(l => (
+                            <tr key={l.id}>
+                              <td className="mono text-muted" style={{ paddingLeft: 20, fontSize: 13, whiteSpace: 'nowrap' }}>{l.open_date}</td>
+                              <td className="mono text-muted" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>{l.close_date}</td>
+                              <td className="num mono">{l.qty}</td>
+                              <td className="num mono">${Number(l.open_price).toFixed(2)}</td>
+                              <td className="num mono">${Number(l.close_price).toFixed(2)}</td>
+                              <td className="num mono text-muted">{l.commission ? `$${Number(l.commission).toFixed(2)}` : '—'}</td>
+                              <td className={`num mono ${l.realized_pnl >= 0 ? 'pos' : 'neg'}`}>{fmtSigned$(l.realized_pnl)}</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>{l.term === 'long_term' ? 'Long-term (>365d)' : 'Short-term'}</td>
+                            </tr>
+                          ))}
+                          {!lots.lots.length && <tr><td colSpan={8}><div className="empty">No closed lots yet for this trade.</div></td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </div>
             )}

@@ -1,0 +1,20 @@
+[Unit]
+Description=Trading Journal AI backend
+After=network.target
+
+[Service]
+Type=simple
+User=trading-journal
+WorkingDirectory=/opt/trading-journal-ai/backend
+EnvironmentFile=/opt/trading-journal-ai/backend/.env
+ExecStart=/opt/trading-journal-ai/.venv/bin/python run_server.py
+Restart=on-failure
+RestartSec=5
+# Hardening: the service only needs its own data dir plus network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-journal-ai/backend
+
+[Install]
+WantedBy=multi-user.target

@@ -102,3 +102,55 @@ export const weeklySummaryApi = {
 export const yearlyKpisApi = {
   get: (params) => api.get('/api/yearly-kpis', { params }),
 };
+
+// Settings > Lot Matching: account-wide FIFO/LIFO default, plus per-trade overrides.
+export const lotMethodApi = {
+  get: () => api.get('/api/settings/lot-method'),
+  set: (method) => api.put('/api/settings/lot-method', { method }),
+  getTradeLots: (tradeId) => api.get(`/api/trades/${tradeId}/lots`),
+  setTradeMethod: (tradeId, method) => api.patch(`/api/trades/${tradeId}/lot-method`, { method }),
+};
+
+// Settings > Backup: encrypted backup destinations (scp/ftp/rsync), schedules and runs.
+export const backupApi = {
+  listDestinations: () => api.get('/api/backup/destinations'),
+  createDestination: (data) => api.post('/api/backup/destinations', data),
+  updateDestination: (id, data) => api.put(`/api/backup/destinations/${id}`, data),
+  deleteDestination: (id) => api.delete(`/api/backup/destinations/${id}`),
+  testDestination: (id) => api.post(`/api/backup/destinations/${id}/test`),
+  setSchedule: (destId, data) => api.put(`/api/backup/schedule/${destId}`, data),
+  listSchedules: () => api.get('/api/backup/schedule'),
+  runNow: (destId, passphrase) => api.post(`/api/backup/run/${destId}`, { passphrase }),
+  runLocal: (passphrase) => api.post('/api/backup/run-local', { passphrase }),
+  listRuns: () => api.get('/api/backup/runs'),
+  listLocalFiles: () => api.get('/api/backup/local-files'),
+  restore: (formData) => api.post('/api/backup/restore', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+};
+
+// Settings > Reconciliation: dividends + broker fee reconciliation.
+export const reconciliationApi = {
+  listDividends: (accountId) => api.get('/api/reconciliation/dividends', { params: accountId != null ? { account_id: accountId } : {} }),
+  createDividend: (data) => api.post('/api/reconciliation/dividends', data),
+  updateDividend: (id, data) => api.put(`/api/reconciliation/dividends/${id}`, data),
+  deleteDividend: (id) => api.delete(`/api/reconciliation/dividends/${id}`),
+  listTrades: (params) => api.get('/api/reconciliation/trades', { params }),
+  reconcileTrade: (tradeId, data) => api.post(`/api/reconciliation/trades/${tradeId}`, data),
+  unreconcileTrade: (tradeId) => api.delete(`/api/reconciliation/trades/${tradeId}`),
+  importStatement: (formData, accountId) => api.post('/api/reconciliation/import', formData, {
+    params: { account_id: accountId },
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  summary: (accountId) => api.get('/api/reconciliation/summary', { params: accountId != null ? { account_id: accountId } : {} }),
+};
+
+// Settings > Security: TLS certificate upload/status for encrypted connections.
+export const tlsApi = {
+  status: () => api.get('/api/settings/tls/status'),
+  upload: (formData) => api.post('/api/settings/tls/certificate', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  remove: () => api.delete('/api/settings/tls/certificate'),
+};
+

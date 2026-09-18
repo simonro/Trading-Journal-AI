@@ -2,11 +2,17 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Pencil, GitMerge, Trash2, Search } from 'lucide-react';
 import { libraryApi } from '../api';
 import { PageHeader } from './ui';
+import LotMatchingSettings from './LotMatchingSettings';
+import BackupSettings from './BackupSettings';
+import SecuritySettings from './SecuritySettings';
 
 const SECTIONS = [
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
+  { id: 'lot-matching', label: 'Lot Matching' },
+  { id: 'backup', label: 'Backup' },
+  { id: 'security', label: 'Security' },
 ];
 
 const TAG_TYPE_LABEL = {
@@ -315,7 +321,7 @@ export default function Settings() {
             onKeyDown={onTabKey}
           >
             {s.label}
-            {lib && (
+            {lib && ['strategy', 'source', 'tag'].includes(s.id) && (
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
@@ -328,7 +334,7 @@ export default function Settings() {
 
       <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${section}`}>
         {loadError && <div className="notice neg" role="alert">{loadError}</div>}
-        {!lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
+        {!lib && !loadError && ['strategy', 'source', 'tag'].includes(section) && <div className="skeleton" style={{ height: 320 }} />}
 
         {lib && section === 'strategy' && (
           <ItemList kind="strategy" {...SECTION_COPY.strategy} items={lib.strategies} onChanged={load} />
@@ -351,6 +357,9 @@ export default function Settings() {
             ))}
           </div>
         )}
+        {section === 'lot-matching' && <LotMatchingSettings />}
+        {section === 'backup' && <BackupSettings />}
+        {section === 'security' && <SecuritySettings />}
       </div>
     </div>
   );
