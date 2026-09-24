@@ -3,5 +3,5 @@ uvicorn[standard]==0.53.0
 python-multipart==0.0.32
 aiofiles==24.1.0
 httpx==0.28.1
-anthropic>=0.43.0
+anthropic>=1.7.0
 python-dotenv==1.2.3
