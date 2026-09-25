@@ -2,7 +2,12 @@ import { useState, useRef, useMemo, useCallback, useId } from 'react';
 
 /* ── formatting ─────────────────────────────────────────────────────────── */
 
-export const n0 = (v) => Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
+// Dollar part of a signed money value. Uses Math.floor, not Math.round: the
+// cents are always rendered separately (e.g. DashboardRender's `net % 1`),
+// so rounding the whole value here would silently carry a >=50c fraction
+// into the dollar digits while the separately-rendered cents stayed as-is —
+// showing e.g. "-$18" next to ".57" for -17.57 instead of "-$17".
+export const n0 = (v) => Math.floor(Math.abs(Number(v) || 0)).toLocaleString('en-US');
 export const money = (v) => {
   const n = Number(v) || 0;
   return `${n < 0 ? '−$' : '+$'}${n0(n)}`;

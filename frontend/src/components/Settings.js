@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Pencil, GitMerge, Trash2, Search } from 'lucide-react';
-import { libraryApi } from '../api';
+import { libraryApi, appSettingsApi } from '../api';
 import { PageHeader } from './ui';
 
 const SECTIONS = [
+  { id: 'general', label: 'General' },
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
@@ -270,6 +271,93 @@ function ItemList({ kind, tagType = '', title, sub, noun, items, onChanged }) {
   );
 }
 
+// Common IANA zones a trader might realistically be importing from. Not
+// exhaustive — the backend accepts any valid IANA zone name, so this list
+// is just a convenient picker rather than a hard restriction.
+const TIMEZONE_OPTIONS = [
+  { value: 'America/New_York', label: 'US Eastern — New York (exchange time)' },
+  { value: 'America/Chicago', label: 'US Central — Chicago' },
+  { value: 'America/Denver', label: 'US Mountain — Denver' },
+  { value: 'America/Los_Angeles', label: 'US Pacific — Los Angeles' },
+  { value: 'Europe/London', label: 'UK — London' },
+  { value: 'Europe/Berlin', label: 'Central Europe — Berlin, Paris, Madrid' },
+  { value: 'Europe/Bucharest', label: 'Eastern Europe — Bucharest, Athens, Helsinki' },
+  { value: 'Europe/Moscow', label: 'Moscow' },
+  { value: 'Asia/Dubai', label: 'Dubai' },
+  { value: 'Asia/Kolkata', label: 'India — Mumbai, Delhi' },
+  { value: 'Asia/Singapore', label: 'Singapore' },
+  { value: 'Asia/Tokyo', label: 'Tokyo' },
+  { value: 'Australia/Sydney', label: 'Sydney' },
+];
+
+/** General app settings: currently just the CSV import timezone. */
+function GeneralSettings() {
+  const [timezone, setTimezone] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    appSettingsApi.get()
+      .then(res => { if (!cancelled) setTimezone(res.data.import_timezone); })
+      .catch(e => { if (!cancelled) setLoadError(errText(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async (value) => {
+    setTimezone(value);
+    setSaving(true);
+    setNotice(null);
+    try {
+      await appSettingsApi.put({ import_timezone: value });
+      setNotice('Saved. Trades reimported from now on will use this timezone.');
+    } catch (e) {
+      setLoadError(errText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ padding: 'var(--space-5)', maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Import timezone</h3>
+      <p className="text-muted" style={{ fontSize: 13, marginBottom: 'var(--space-4)' }}>
+        Thinkorswim's CSV export stamps fill times using the desktop app's local
+        system clock, not exchange time. Set the timezone your trading computer
+        runs in — the journal converts every imported fill to US Eastern time
+        so it lines up correctly with the price charts and hold-time math.
+        This only affects trades imported after you change it; already-imported
+        trades keep their existing times.
+      </p>
+
+      {loadError && <div className="notice neg" role="alert" style={{ marginBottom: 12 }}>{loadError}</div>}
+      {notice && <div className="notice pos" role="status" style={{ marginBottom: 12 }}>{notice}</div>}
+
+      {loading ? (
+        <div className="skeleton" style={{ height: 36, width: 320 }} />
+      ) : (
+        <select
+          value={timezone}
+          disabled={saving}
+          onChange={e => save(e.target.value)}
+          aria-label="Import timezone"
+          style={{ fontSize: 14, padding: '8px 12px', minWidth: 320 }}
+        >
+          {!TIMEZONE_OPTIONS.some(o => o.value === timezone) && timezone && (
+            <option value={timezone}>{timezone} (custom)</option>
+          )}
+          {TIMEZONE_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const [lib, setLib] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -315,7 +403,7 @@ export default function Settings() {
             onKeyDown={onTabKey}
           >
             {s.label}
-            {lib && (
+            {lib && s.id !== 'general' && (
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
@@ -327,8 +415,9 @@ export default function Settings() {
       </div>
 
       <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${section}`}>
-        {loadError && <div className="notice neg" role="alert">{loadError}</div>}
-        {!lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
+        {section === 'general' && <GeneralSettings />}
+        {section !== 'general' && loadError && <div className="notice neg" role="alert">{loadError}</div>}
+        {section !== 'general' && !lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
 
         {lib && section === 'strategy' && (
           <ItemList kind="strategy" {...SECTION_COPY.strategy} items={lib.strategies} onChanged={load} />

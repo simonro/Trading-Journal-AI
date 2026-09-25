@@ -131,6 +131,43 @@ class GoalsBody(BaseModel):
     exit_efficiency: float = 50.0
 
 
+APP_SETTINGS_DEFAULTS = {
+    # The local timezone Thinkorswim's desktop app was running in when it
+    # wrote a CSV export, used to convert fill times to exchange (Eastern)
+    # time on import. See csv_parser.IMPORT_LOCAL_TZ for the parsing side.
+    "import_timezone": "Europe/Bucharest",
+}
+
+
+class AppSettingsBody(BaseModel):
+    import_timezone: str
+
+
+@app.get("/api/app-settings")
+def get_app_settings(conn: sqlite3.Connection = Depends(get_connection)):
+    row = conn.execute(
+        "SELECT value FROM settings WHERE account_id = 0 AND key = 'app_settings'",
+    ).fetchone()
+    if row:
+        return {**APP_SETTINGS_DEFAULTS, **json.loads(row["value"])}
+    return APP_SETTINGS_DEFAULTS
+
+
+@app.put("/api/app-settings")
+def put_app_settings(
+    body: AppSettingsBody,
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    payload = json.dumps({"import_timezone": body.import_timezone})
+    conn.execute(
+        """INSERT INTO settings (account_id, key, value) VALUES (0, 'app_settings', ?)
+           ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value""",
+        (payload,),
+    )
+    conn.commit()
+    return json.loads(payload)
+
+
 @app.get("/api/goals")
 def get_goals(
     account_id: int | None = Query(None),
@@ -428,7 +465,10 @@ async def import_csv(
     except UnicodeDecodeError:
         content = raw.decode('latin-1')
 
-    trades, skipped = parse_broker_csv(content, broker, account_id, conn)
+    trades, skipped = parse_broker_csv(
+        content, broker, account_id, conn,
+        import_tz=get_app_settings(conn)["import_timezone"],
+    )
 
     imported = 0
     errors = []

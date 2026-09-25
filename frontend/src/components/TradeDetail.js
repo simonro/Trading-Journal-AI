@@ -41,27 +41,47 @@ function computeStats(trade) {
   const adjustedCost = avgEntry ? avgEntry * totalQty : null;
   const netRoi = adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
 
-  const sortedTimes = [...execs].map(e => e.time).filter(Boolean).sort();
-  const openTime  = sortedTimes[0];
-  const closeTime = sortedTimes[sortedTimes.length - 1];
+  // Sort by full date+time (not time alone) so multi-day trades order correctly.
+  const sortedExecs = [...execs]
+    .filter(e => e.time)
+    .sort((a, b) => `${a.date || ''}T${a.time}`.localeCompare(`${b.date || ''}T${b.time}`));
+  const openExec  = sortedExecs[0];
+  const closeExec = sortedExecs[sortedExecs.length - 1];
+  const openTime  = openExec?.time;
+  const closeTime = closeExec?.time;
+  const openDate  = openExec?.date;
+  const closeDate = closeExec?.date;
 
   let holdMinutes = null;
-  if (openTime && closeTime && exitFills.length > 0) {
-    const [oh, om] = openTime.split(':').map(Number);
-    const [ch, cm] = closeTime.split(':').map(Number);
-    holdMinutes = (ch * 60 + cm) - (oh * 60 + om);
+  if (openDate && openTime && closeDate && closeTime && exitFills.length > 0) {
+    const openDt  = new Date(`${openDate}T${openTime}`);
+    const closeDt = new Date(`${closeDate}T${closeTime}`);
+    if (!isNaN(openDt) && !isNaN(closeDt)) {
+      holdMinutes = Math.round((closeDt - openDt) / 60000);
+    }
   }
 
   const fmtHold = (m) => {
     if (m == null) return '—';
     if (m < 60) return `${m}m`;
-    return `${Math.floor(m / 60)}h ${m % 60}m`;
+    const mins = m % 60;
+    let hours = Math.floor(m / 60);
+    const hrs = hours % 24;
+    let days = Math.floor(hours / 24);
+    const months = Math.floor(days / 30);
+    days = days % 30;
+    const parts = [];
+    if (months > 0) parts.push(`${months}mo`);
+    if (months > 0 || days > 0) parts.push(`${days}d`);
+    parts.push(`${hrs}h`);
+    parts.push(`${mins}m`);
+    return parts.join(' ');
   };
 
   const isClosed = exitFills.length > 0;
   const isWin = (trade.net_pnl || 0) > 0;
 
-  return { avgEntry, avgExit, totalQty, adjustedCost, netRoi, openTime, closeTime, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+  return { avgEntry, avgExit, totalQty, adjustedCost, netRoi, openTime, closeTime, openDate, closeDate, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
 }
 
 // ── Stat row helper ────────────────────────────────────────────────────────────
@@ -671,8 +691,8 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
                 <StatRow label="Average Exit" value={stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : '—'} />
-                <StatRow label="Entry Time" value={stats.openTime?.slice(0, 5) || '—'} />
-                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime?.slice(0, 5)) || '—'} />
+                <StatRow label="Entry Time" value={stats.openTime ? `${stats.openDate ? stats.openDate + ' ' : ''}${stats.openTime.slice(0, 5)}` : '—'} />
+                <StatRow label="Exit Time" value={(stats.isClosed && stats.closeTime) ? `${stats.closeDate ? stats.closeDate + ' ' : ''}${stats.closeTime.slice(0, 5)}` : '—'} />
                 <StatRow label="Hold Time" value={stats.fmtHold(stats.holdMinutes)} />
 
                 {editingStats ? (

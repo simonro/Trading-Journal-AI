@@ -227,6 +227,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                     onOpenDetail={(t) => onOpenDetail(t, paginated)}
                     customSetups={customSetups}
                     onCustomSetupsChanged={reloadCustomSetups}
+                    onTradeDeleted={load}
                   />
                 ))
               )}

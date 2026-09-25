@@ -3,6 +3,10 @@ import json
 import csv
 import io
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # shouldn't happen — the app requires Python 3.11+
+    ZoneInfo = None
 
 
 MONTH_MAP = {
@@ -27,6 +31,43 @@ def normalize_date(date_str: str) -> str:
     if len(y) == 2:
         y = '20' + y
     return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
+
+
+# Thinkorswim's Account Statement export stamps every execution using the
+# desktop app's local system clock, not exchange time. A trader outside the
+# US (this app is configured for Berlin) gets fill times in their own
+# timezone, while everything downstream — chart candles from Alpaca, the
+# hold-time math, session/day bucketing — assumes Eastern time, matching
+# the exchange. Converting once here, at parse time, keeps every timestamp
+# that reaches the database already in ET, so the rest of the app never
+# needs to know a conversion happened.
+IMPORT_LOCAL_TZ = 'Europe/Bucharest'
+EXCHANGE_TZ = 'America/New_York'
+
+
+def _to_exchange_time(date_str: str, time_str: str, from_tz: str = IMPORT_LOCAL_TZ) -> tuple[str, str]:
+    """Convert a 'YYYY-MM-DD' + 'HH:MM[:SS]' pair from from_tz to exchange
+    (Eastern) time. Returns (iso_date, time_str), both possibly shifted to
+    the previous or next calendar day if the conversion crosses midnight.
+    Falls back to the unconverted input on any parsing failure, so one bad
+    row can't crash the whole import."""
+    if not date_str or not time_str or ZoneInfo is None:
+        return date_str, time_str
+    naive = None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            naive = datetime.strptime(f"{date_str} {time_str}", fmt)
+            break
+        except ValueError:
+            continue
+    if naive is None:
+        return date_str, time_str
+    try:
+        localized = naive.replace(tzinfo=ZoneInfo(from_tz))
+        eastern = localized.astimezone(ZoneInfo(EXCHANGE_TZ))
+    except Exception:
+        return date_str, time_str
+    return eastern.strftime('%Y-%m-%d'), eastern.strftime('%H:%M:%S')
 
 
 def trade_group_key(date_str: str, ticker: str, instrument_type: str, seq: int,
@@ -288,7 +329,7 @@ def _parse_trade_history_expiry(exp_str: str) -> str | None:
     return f"{year:04d}-{month:02d}-{int(day):02d}"
 
 
-def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
+def parse_trade_history_section(rows: list[list[str]], import_tz: str = IMPORT_LOCAL_TZ) -> list[dict]:
     """
     Parse Account Trade History section.
     Header: ,Exec Time,Spread,Side,Qty,Pos Effect,Symbol,Exp,Strike,Type,Price,Net Price,Order Type
@@ -351,6 +392,12 @@ def parse_trade_history_section(rows: list[list[str]]) -> list[dict]:
             continue
 
         iso_date = normalize_date(date_part)
+        # Shift from the machine's local timezone to exchange (Eastern) time —
+        # see _to_exchange_time. date_part is kept in sync with iso_date so
+        # every downstream field that reads either one sees the same, correct
+        # value; a trade near midnight can legitimately move to the adjacent day.
+        iso_date, time_part = _to_exchange_time(iso_date, time_part, import_tz)
+        date_part = iso_date
 
         if type_str in ('CALL', 'PUT'):
             instrument_type = 'OPTION'
@@ -444,7 +491,7 @@ def aggregate_executions(fills: list[dict]) -> dict:
     }
 
 
-def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = None) -> list[dict]:
+def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = None, import_tz: str = IMPORT_LOCAL_TZ) -> list[dict]:
     """
     Parse rows from the Cash Balance section.
     Expects header: DATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE
@@ -481,6 +528,10 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
 
         date_val = row[col.get('DATE', 0)].strip() if col.get('DATE', 0) < len(row) else ''
         time_val = row[col.get('TIME', 1)].strip() if col.get('TIME', 1) < len(row) else ''
+        # Same local-to-exchange shift as Trade History, so this section's
+        # iso_date still matches Trade History's for cross-section commission
+        # matching (see _cross_section_key, which keys on iso_date).
+        iso_date_val, time_val = _to_exchange_time(normalize_date(date_val), time_val, import_tz)
         desc = row[col.get('DESCRIPTION', 4)].strip().strip('"') if col.get('DESCRIPTION', 4) < len(row) else ''
 
         # Remove Excel formula wrapper: ="value"
@@ -503,8 +554,8 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             continue
 
         parsed.update({
-            'date': date_val,
-            'iso_date': normalize_date(date_val),
+            'date': iso_date_val,
+            'iso_date': iso_date_val,
             'time': time_val,
             'amount': amount,
             'commission': total_commission,
@@ -515,7 +566,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
     return executions
 
 
-def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
+def parse_futures_section_rows(rows: list[list[str]], import_tz: str = IMPORT_LOCAL_TZ) -> list[dict]:
     """
     Parse rows from the Futures Statements section.
     Header: Trade Date,Exec Date,Exec Time,Type,Ref #,Description,Misc Fees,Commissions & Fees,Amount,Balance
@@ -562,9 +613,12 @@ def parse_futures_section_rows(rows: list[list[str]]) -> list[dict]:
         if not parsed:
             continue
 
+        # Same local-to-exchange shift as the other Thinkorswim sections.
+        iso_trade_date, exec_time = _to_exchange_time(normalize_date(trade_date), exec_time, import_tz)
+
         parsed.update({
-            'date': trade_date,
-            'iso_date': normalize_date(trade_date),
+            'date': iso_trade_date,
+            'iso_date': iso_trade_date,
             'time': exec_time,
             'amount': amount,
             'commission': total_commission,
@@ -829,7 +883,7 @@ def _cross_section_key(ex: dict) -> str:
     return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
 
 
-def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
     """
     Full CSV parse pipeline.
     Returns (list of trade dicts ready for DB insert, skipped_count).
@@ -843,9 +897,9 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
 
     all_executions = []
     if cash_rows:
-        all_executions.extend(parse_cash_balance_section(cash_rows))
+        all_executions.extend(parse_cash_balance_section(cash_rows, import_tz=import_tz))
     if futures_rows:
-        all_executions.extend(parse_futures_section_rows(futures_rows))
+        all_executions.extend(parse_futures_section_rows(futures_rows, import_tz=import_tz))
 
     # Merge Trade History: add fills not already represented in Cash Balance / Futures.
     # Use (iso_date, ticker, action, qty, price) to match across sections — time formats differ.
@@ -857,7 +911,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None) -> tuple[lis
         for ex in all_executions:
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
             cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
-        for ex in parse_trade_history_section(trade_history_rows):
+        for ex in parse_trade_history_section(trade_history_rows, import_tz=import_tz):
             if _cross_section_key(ex) in cb_exact_keys:
                 continue
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
@@ -1202,11 +1256,14 @@ def parse_ibkr_trades_section(records: list[dict[str, str]]) -> list[dict]:
     return executions
 
 
-def parse_ibkr_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_ibkr_csv(content: str, account_id: int, conn=None, import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
     """
     IBKR Activity Statement CSV parse pipeline (Client Portal -> Performance &
     Reports -> Statements -> Activity -> CSV). Same output contract as
     parse_thinkorswim_csv: (trade dicts ready for DB insert, skipped_count).
+    import_tz is accepted for a uniform call signature across brokers but
+    currently unused here — IBKR statements haven't been confirmed to have
+    the same local-clock timestamp issue Thinkorswim exports do.
     """
     content = content.lstrip('﻿')
     sections = split_ibkr_sections(content)
@@ -1460,8 +1517,10 @@ def parse_generic_rows(content):
     return executions
 
 
-def parse_generic_csv(content, account_id, conn=None):
-    """Generic template pipeline. Same output contract as the broker parsers."""
+def parse_generic_csv(content, account_id, conn=None, import_tz: str = IMPORT_LOCAL_TZ):
+    """Generic template pipeline. Same output contract as the broker parsers.
+    import_tz is accepted for a uniform call signature but unused — this
+    template is filled in by hand, so there's no local-clock export to convert."""
     return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
 
 
@@ -1501,11 +1560,15 @@ def detect_broker(content: str) -> str | None:
     return None
 
 
-def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
     """
     Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
     'auto'. An explicit broker that clearly does not match the file raises a
     ValueError with a hint, instead of importing zero trades silently.
+    import_tz: the local timezone Thinkorswim's desktop app was running in
+    when it wrote the export, used to convert fill times to exchange (Eastern)
+    time. Defaults to IMPORT_LOCAL_TZ; callers should normally pass the
+    user's configured value from Settings > General instead.
     """
     key = (broker or 'auto').strip().lower()
     detected = detect_broker(content)
@@ -1529,4 +1592,4 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
             f"{BROKER_LABELS[key]} is selected. Change the broker dropdown and try again."
         )
 
-    return BROKER_PARSERS[key](content, account_id, conn)
+    return BROKER_PARSERS[key](content, account_id, conn, import_tz)

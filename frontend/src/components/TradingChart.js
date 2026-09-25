@@ -305,16 +305,33 @@ export default function TradingChart({
     // ── Execution markers ────────────────────────────────────────────────
     // Colored and shaped by the actual fill action (matches the Buy/Sell legend
     // below the chart), not by entry/exit role — a short's opening fill is a SELL,
-    // so styling it as "entry = green/up" made it look like a buy. Only meaningful
-    // at intraday resolution: on the daily/weekly view a 35-minute trade is a
-    // fraction of one bar, so there's nothing sensible to anchor a marker to.
-    if (!isWide) {
+    // so styling it as "entry = green/up" made it look like a buy.
+    // Each fill uses its OWN date (f.date), not the trade's overall `date` prop —
+    // a multi-day trade's entry and exit happened on different calendar days.
+    // On intraday timeframes a fill snaps to its own time bucket via execToTs.
+    // On Daily/Weekly, there's no intraday bucket to snap to, so instead we find
+    // the loaded bar (day or week) that actually contains that fill's date.
+    // Compare by each bar's own Eastern *calendar date*, not raw epoch numbers —
+    // Alpaca doesn't stamp daily/weekly bars at midnight UTC, so a synthetic
+    // midnight timestamp for the fill's date sits earlier than the real bar
+    // timestamp for that same day, undershooting by one trading day.
+    {
       const bucketMin = TF_MINUTES[timeframe] || 5;
+      const barDateET = (ts) => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const findWideBarTs = (dateStr) => {
+        let match = null;
+        for (const c of candleData) {
+          const d = barDateET(c.time);
+          if (d <= dateStr) match = c.time;
+          else break;
+        }
+        return match;
+      };
       const markers = executions
-        .filter(f => f.time)
+        .filter(f => f.time && f.date)
         .map(f => {
-          const ts = execToTs(date, f.time, bucketMin);
-          if (!ts) return null;
+          const ts = isWide ? findWideBarTs(f.date) : execToTs(f.date, f.time, bucketMin);
+          if (ts == null) return null;
           const isBuy = f.action === 'BOT';
           return {
             isBuy,

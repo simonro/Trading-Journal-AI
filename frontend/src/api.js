@@ -91,6 +91,13 @@ export const libraryApi = {
   remove: (item) => api.post('/api/library/delete', item),
 };
 
+// Settings > General: app-wide preferences, currently just the timezone
+// used to convert broker CSV import timestamps to exchange (Eastern) time.
+export const appSettingsApi = {
+  get: () => api.get('/api/app-settings'),
+  put: (data) => api.put('/api/app-settings', data),
+};
+
 export const edgeReportApi = {
   get: (params) => api.get('/api/edge-report', { params }),
 };
