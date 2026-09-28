@@ -1,0 +1,15 @@
+"Activity Date","Process Date","Settle Date","Instrument","Description","Trans Code","Quantity","Price","Amount"
+"9/25/2026","9/25/2026","9/25/2026","TSLA","Option Expiration for TSLA 9/25/2026 Put $240.00","OEXP","1","",""
+"9/24/2026","9/24/2026","9/25/2026","MSFT","Microsoft
+CUSIP: 594918104","Buy","0.5","$420.00","($210.00)"
+"9/24/2026","9/24/2026","9/24/2026","AAPL","Cash Div: R/D 2026-09-20 P/D 2026-09-24 - 10 shares at 0.24","CDIV","","","$2.40"
+"9/23/2026","9/23/2026","9/24/2026","SPY","SPY 9/25/2026 Call $450.00","STC","2","$1.80","$359.94"
+"9/22/2026","9/22/2026","9/23/2026","TSLA","TSLA 9/25/2026 Put $240.00","BTO","1","$2.10","($210.03)"
+"9/22/2026","9/22/2026","9/23/2026","SPY","SPY 9/25/2026 Call $450.00","BTO","2","$1.25","($250.06)"
+"9/21/2026","9/21/2026","9/22/2026","AAPL","Apple
+CUSIP: 037833100","Sell","10","$177.50","$1,774.97"
+"9/21/2026","9/21/2026","9/22/2026","AAPL","Apple
+CUSIP: 037833100","Buy","10","$175.00","($1,750.00)"
+"9/20/2026","9/20/2026","9/20/2026","","ACH Deposit","ACH","","","$5,000.00"
+"","","","","","","","",""
+"The data provided is for informational purposes only. Please consult a professional tax service or personal tax advisor if you need instructions on how to calculate cost basis or questions regarding your specific tax situation. Reminder: This data does not include Robinhood Crypto or Robinhood Spending activity."

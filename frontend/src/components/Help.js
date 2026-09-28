@@ -168,7 +168,7 @@ const FEATURES = [
   {
     name: 'Import',
     icon: '📤',
-    description: 'CSV importer for Thinkorswim account statements and Interactive Brokers (IBKR) Activity Statements. Pick the broker from the dropdown (or leave Auto-detect). Automatically parses executions, groups them into trades, and detects duplicates on re-import. See the README for a Claude Code prompt that adds any other broker.',
+    description: 'CSV importer for Thinkorswim account statements, Interactive Brokers (IBKR) Activity Statements and Robinhood activity reports. Pick the broker from the dropdown (or leave Auto-detect). Automatically parses executions, groups them into trades, and detects duplicates on re-import. See the README for a Claude Code prompt that adds any other broker.',
     tips: [
       'Re-importing a file is safe - duplicates are detected by trade group and skipped.',
       'If you deleted a bad trade and need to re-import it, the re-import will restore it cleanly.',

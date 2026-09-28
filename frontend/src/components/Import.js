@@ -9,6 +9,7 @@ const BROKERS = [
   { value: 'auto', label: 'Auto-detect' },
   { value: 'thinkorswim', label: 'Thinkorswim (Schwab)' },
   { value: 'ibkr', label: 'Interactive Brokers (IBKR)' },
+  { value: 'robinhood', label: 'Robinhood' },
   { value: 'generic', label: 'Other broker (generic template)' },
 ];
 
@@ -17,16 +18,18 @@ const TEMPLATE_URL = '/templates/generic_trades_template.csv';
 const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
-  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement or an IBKR Activity Statement.',
+  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement, an IBKR Activity Statement or a Robinhood activity report.',
   thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em></>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
+  robinhood: <>Export from Robinhood (web or app): <em>Account → Reports and statements → Reports → Generate new report</em>, pick the date range, then download the CSV. Robinhood reports have no execution times, so fills on the same day keep the report's order.</>,
   generic: <>Copy your fills into the template, one row per execution. Buys and sells of the same symbol are grouped into round-trip trades automatically, the same way as a broker import.</>,
 };
 
 const BROKER_DROP_LABEL = {
-  auto: 'Drop your broker CSV (Thinkorswim or IBKR)',
+  auto: 'Drop your broker CSV (Thinkorswim, IBKR or Robinhood)',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
   ibkr: 'Drop IBKR Activity Statement CSV',
+  robinhood: 'Drop Robinhood activity report CSV',
   generic: 'Drop your filled-in generic template CSV',
 };
 
@@ -35,6 +38,7 @@ function brokerFromAccount(account) {
   const b = (account?.broker || '').toLowerCase();
   if (/ibkr|interactive/.test(b)) return 'ibkr';
   if (/thinkorswim|tos|schwab/.test(b)) return 'thinkorswim';
+  if (/robinhood/.test(b)) return 'robinhood';
   return 'auto';
 }
 

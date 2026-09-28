@@ -412,7 +412,7 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
 async def import_csv(
     account_id: int = Form(...),
     file: UploadFile = File(...),
-    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'auto' (sniff the file)
+    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'robinhood' | 'generic' | 'auto' (sniff the file)
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     if not file.filename.lower().endswith('.csv'):

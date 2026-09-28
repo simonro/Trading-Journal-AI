@@ -203,10 +203,11 @@ test('Import keeps broker CSV import and diary analysis, with keyboard dropzones
   fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /^Import$/ }));
   expect(await screen.findByRole('heading', { name: /Import Broker CSV/ })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Analyze Trading Diary/ })).toBeInTheDocument();
-  // Both supported brokers stay selectable, with auto-detect as the default.
+  // Every supported broker stays selectable, with auto-detect as the default.
   const broker = screen.getByLabelText('Broker');
   expect(broker).toHaveValue('auto');
   expect(within(broker).getByRole('option', { name: /Interactive Brokers/ })).toBeInTheDocument();
+  expect(within(broker).getByRole('option', { name: /Robinhood/ })).toBeInTheDocument();
   expect(within(broker).getByRole('option', { name: /Thinkorswim/ })).toBeInTheDocument();
   const dropzones = screen.getAllByRole('button', { name: /Press Enter to browse/ });
   expect(dropzones).toHaveLength(2);

@@ -114,3 +114,49 @@ def test_generic_template_reimport_keeps_iso_named_trades(client):
     trades = stored(client)
     assert set(trades) == {"2026-09-15_TSLA_STOCK_1", "2026-09-15_TSLA_STOCK_2"}
     assert trades["2026-09-15_TSLA_STOCK_1"] == (-403.0, 2)
+
+
+RH = '"Activity Date","Process Date","Settle Date","Instrument","Description","Trans Code","Quantity","Price","Amount"\n'
+
+
+def rh_report(rows):
+    # Robinhood lists newest first
+    return RH + "".join(f'"{d}","{d}","{d}","{t}","{desc}","{code}","{q}","{p}","{a}"\n'
+                        for d, t, desc, code, q, p, a in reversed(rows))
+
+
+RH_ROWS = [
+    ("9/10/2026", "SPY", "SPY 10/16/2026 Call $450.00", "BTO", "1", "$2.00", "($200.03)"),
+    ("9/25/2026", "NVDA", "Nvidia", "Buy", "20", "$120.00", "($2,400.00)"),
+    ("9/28/2026", "AMD", "AMD", "Buy", "5", "$150.00", "($750.00)"),
+    # the first report was pulled here, mid-day on 9/28
+    ("9/28/2026", "AMD", "AMD", "Buy", "5", "$150.00", "($750.00)"),
+    ("9/28/2026", "AMD", "AMD", "Sell", "10", "$155.00", "$1,549.95"),
+    ("10/2/2026", "NVDA", "Nvidia", "Sell", "20", "$125.00", "$2,499.94"),
+    ("10/9/2026", "SPY", "SPY 10/16/2026 Call $450.00", "STC", "1", "$3.00", "$299.97"),
+]
+
+
+def test_robinhood_overlapping_reports(client):
+    conn = sqlite3.connect(client.db)
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=1").fetchone():
+        conn.execute("INSERT INTO accounts (id, name, type) VALUES (1, 'RH', 'day_trading')")
+        conn.commit()
+
+    def send(rows):
+        r = client.post("/api/import-csv", data={"account_id": "1", "broker": "robinhood"},
+                        files={"file": ("rh.csv", rh_report(rows).encode(), "text/csv")})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    send(RH_ROWS[:3])
+    assert send(RH_ROWS)["skipped"] == 3   # only the fills already stored, not the repeat AMD buy
+    trades = stored(client)
+    # AMD: 2 x 750.00 paid, 1,549.95 received -> +49.95 over three fills
+    assert trades["2026-09-28_AMD_STOCK_1"] == (49.95, 3)
+    # positions open at the end of the first report close in the second
+    assert trades["2026-10-02_NVDA_STOCK_1"] == (99.94, 2)
+    assert trades["2026-09-10_SPY_OPTION_2026-10-16_450_CALL_1"] == (99.94, 2)
+
+    assert send(RH_ROWS)["skipped"] == len(RH_ROWS)   # a third import changes nothing
+    assert stored(client) == trades

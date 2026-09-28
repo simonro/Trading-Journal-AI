@@ -13,7 +13,7 @@ your days on process.
 - **The numbers are not AI.** Trade grouping, P&L, fees and statistics are plain code with tests.
   AI is an optional coaching layer on top.
 - **Stocks, options and futures**, with partial fills, scale-ins and shorts grouped automatically.
-- **Thinkorswim and Interactive Brokers** importers, plus a template for any other broker.
+- **Thinkorswim, Interactive Brokers and Robinhood** importers, plus a template for any other broker.
 - **Free and MIT licensed.** No paid tier.
 
 **[Quick start](#quick-start)** · **[Watch the walkthrough](https://www.youtube.com/watch?v=LTR4HOfS_hc)** · **[Releases](https://github.com/simonro/Trading-Journal-AI/releases)** · **[Privacy](#privacy-and-your-data)**
@@ -92,7 +92,7 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
 - **Settings**: the name library. Strategies, sources and tags in one place, with rename, merge and
   delete. Merging rewrites every trade that used the old name and remembers it, so the next diary
   analysis that produces the duplicate saves it under the name you kept
-- **Import**: Thinkorswim account statement CSV and Interactive Brokers (IBKR) Activity Statement CSV, with a broker dropdown (auto-detect by default). Any other broker imports through a generic CSV template, one row per fill
+- **Import**: Thinkorswim account statement CSV, Interactive Brokers (IBKR) Activity Statement CSV and Robinhood activity report CSV, with a broker dropdown (auto-detect by default). Any other broker imports through a generic CSV template, one row per fill
 
 ## Screenshots
 
@@ -201,7 +201,7 @@ To check what changed, see the [releases page](https://github.com/simonro/Tradin
 
 ## Importing from a broker that is not listed
 
-Thinkorswim and Interactive Brokers have dedicated importers. For anything else, use the generic
+Thinkorswim, Interactive Brokers and Robinhood have dedicated importers. For anything else, use the generic
 template: one row per fill, which the journal groups into round-trip trades exactly like a broker
 import. On the Import page, open **Broker not listed?** to download it.
 

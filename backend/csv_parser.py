@@ -2,6 +2,7 @@ import re
 import json
 import csv
 import io
+from collections import Counter
 from datetime import datetime
 
 
@@ -581,21 +582,24 @@ def execution_fingerprint(exec_dict: dict) -> str:
     return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
 
 
-def get_existing_fingerprints(conn, account_id: int) -> set[str]:
-    """Load all existing execution fingerprints for an account.
+def get_existing_fingerprints(conn, account_id: int) -> Counter:
+    """Count the stored execution fingerprints for an account.
     Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+    A count, not a set: identical fills on one day (a split order, or any repeat in an
+    export without times) are each a separate fill, and a later statement covering the
+    rest of that day must only skip as many as are already stored.
     """
     cursor = conn.execute(
         "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
     )
-    fingerprints = set()
+    fingerprints = Counter()
     for row in cursor:
         ticker = row[0] or ''
         try:
             execs = json.loads(row[1] or '[]')
             for e in execs:
                 fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
-                fingerprints.add(fp)
+                fingerprints[fp] += 1
         except Exception:
             pass
     return fingerprints
@@ -622,9 +626,12 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     Multiple cycles per ticker produce separate numbered trades (_1, _2, ...).
     """
     # Sort all fills chronologically so multi-day positions process in order
+    # Stored fills rebuilt by overlapping_db_fills sort ahead of new fills on a tie:
+    # they were imported first, and exports without a time column (Robinhood) tie on
+    # every same-day fill.
     executions_sorted = sorted(
         executions,
-        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''))
+        key=lambda ex: (ex.get('iso_date', ex['date']), ex.get('time', ''), 0 if ex.get('_old_group') else 1)
     )
 
     # Key by (ticker, instrument_type) — no date — so multi-day trades stay together.
@@ -884,12 +891,13 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
 
     # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
     # emits identical time/price/qty fills for large split orders)
-    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
     skipped = 0
     unique_executions = []
     for exec_dict in all_executions:
         fp = execution_fingerprint(exec_dict)
-        if fp in existing_fps:
+        if existing_fps[fp] > 0:
+            existing_fps[fp] -= 1
             skipped += 1
         else:
             # Enrich with ticker/date for serialization
@@ -1465,17 +1473,238 @@ def parse_generic_csv(content, account_id, conn=None):
     return build_trades_from_executions(parse_generic_rows(content), account_id, conn)
 
 
+# ── Robinhood account activity report ─────────────────────────────────────────
+#
+# Robinhood's CSV report (Account -> Reports and statements -> Reports) is one
+# row per account event, newest first:
+#
+#   "Activity Date","Process Date","Settle Date","Instrument","Description","Trans Code","Quantity","Price","Amount"
+#   "9/24/2026","9/24/2026","9/25/2026","AAPL","Apple
+#   CUSIP: 037833100","Buy","10","$175.00","($1,750.00)"
+#   "9/24/2026","9/24/2026","9/25/2026","SPY","SPY 9/26/2026 Call $450.00","BTO","1","$1.25","($125.03)"
+#
+# Descriptions can span lines inside quotes, so the file is read with the csv
+# module as a whole. There is no execution time, so fills keep the file's order
+# within a day (reversed to oldest first). Amount is the cash that actually
+# moved, fees included; the difference from price x qty is booked as the fill's
+# commission so net P&L always equals the cash Robinhood reports. Dividends,
+# transfers, interest and other non-trade rows are ignored.
+
+_RH_BUY = {'BUY', 'BTO', 'BTC'}
+_RH_SELL = {'SELL', 'STO', 'STC'}
+# Option contract leaves the account at zero value: expired, assigned or exercised.
+# An assignment or exercise also prints its own Buy/Sell row for the shares.
+_RH_OPTION_CLOSE = {'OEXP', 'OASGN', 'OEXCS'}
+
+_RH_OPTION_RE = re.compile(
+    r'([A-Z][A-Z.]*)\s+(\d{1,2}/\d{1,2}/\d{2,4})\s+(CALL|PUT)\s+\$?([\d,]+(?:\.\d+)?)',
+    re.IGNORECASE,
+)
+
+
+def _robinhood_header(cells) -> dict | None:
+    names = [c.strip().lower() for c in cells]
+    if 'activity date' in names and 'trans code' in names:
+        return {n: i for i, n in enumerate(names)}
+    return None
+
+
+def _robinhood_option(description: str) -> dict | None:
+    """'SPY 9/26/2026 Call $450.00' (or 'Option Expiration for SPY ...') -> contract fields."""
+    m = _RH_OPTION_RE.search(' '.join(description.split()))
+    if not m:
+        return None
+    ticker, expiry, cp, strike = m.groups()
+    expiry = _generic_date(expiry)
+    if not expiry:
+        return None
+    return {
+        'ticker': ticker.upper(),
+        'option_expiry': expiry,
+        'option_strike': float(strike.replace(',', '')),
+        'option_type': cp.upper(),
+    }
+
+
+def _robinhood_open_option_qty(conn, account_id: int) -> dict[tuple, float]:
+    """Net open contracts per option already stored (positive long, negative short)."""
+    held: dict[tuple, float] = {}
+    if not conn:
+        return held
+    for pos in load_open_positions_from_db(conn, account_id):
+        if pos['instrument_type'] != 'OPTION':
+            continue
+        k = _option_pos_key(pos['ticker'], 'OPTION', pos.get('option_expiry'),
+                            pos.get('option_strike'), pos.get('option_type'))
+        net = sum(e.get('qty', 0) if e.get('action') == 'BOT' else -e.get('qty', 0)
+                  for e in pos['parsed_execs'])
+        held[k] = held.get(k, 0) + net
+    return held
+
+
+def parse_robinhood_rows(content: str, account_id: int = 0, conn=None) -> list[dict]:
+    """Read a Robinhood activity report into execution dicts. Raises ValueError naming bad trade rows."""
+    rows = list(csv.reader(io.StringIO(content.lstrip('﻿'))))
+
+    header_at, col = None, None
+    for i, cells in enumerate(rows[:20]):
+        found = _robinhood_header(cells)
+        if found:
+            header_at, col = i, found
+            break
+    if col is None:
+        raise ValueError(
+            "This does not look like a Robinhood activity report. The header row needs "
+            "'Activity Date' and 'Trans Code' columns."
+        )
+
+    def cell(cells, name):
+        i = col.get(name)
+        return cells[i].strip() if i is not None and i < len(cells) else ''
+
+    # Keep only trade rows, with their line number in the file for error messages.
+    # csv.reader counts records, not physical lines, so track line_num as we go.
+    reader = csv.reader(io.StringIO(content.lstrip('﻿')))
+    records = []
+    for idx, cells in enumerate(reader):
+        line = reader.line_num
+        if idx <= header_at:
+            continue
+        code = cell(cells, 'trans code').upper()
+        if code in _RH_BUY or code in _RH_SELL or code in _RH_OPTION_CLOSE:
+            records.append((line, code, cells))
+
+    # Newest first in the export: flip to oldest first, then order by date so a
+    # file that was re-sorted in a spreadsheet still reads chronologically.
+    dates = [_generic_date(cell(c, 'activity date')) for _, _, c in records]
+    known = [d for d in dates if d]
+    if known and known[0] > known[-1]:
+        records.reverse()
+    records.sort(key=lambda r: _generic_date(cell(r[2], 'activity date')) or '')
+
+    held = _robinhood_open_option_qty(conn, account_id)
+    executions, problems = [], []
+
+    for line, code, cells in records:
+        why = []
+        date = _generic_date(cell(cells, 'activity date'))
+        if not date:
+            why.append(f"activity date '{cell(cells, 'activity date')}' is not MM/DD/YYYY")
+
+        description = cell(cells, 'description')
+        option = _robinhood_option(description)
+        is_option = code in ('BTO', 'BTC', 'STO', 'STC') or code in _RH_OPTION_CLOSE or option is not None
+        if is_option and not option:
+            why.append(f"could not read the option contract from '{' '.join(description.split())}'")
+
+        qty_text = cell(cells, 'quantity')
+        short_hint = qty_text.upper().endswith('S')
+        try:
+            qty = abs(_num(qty_text.rstrip('Ss')))
+            if qty == 0:
+                raise ValueError
+            qty = int(qty) if qty == int(qty) else round(qty, 6)
+        except ValueError:
+            qty = None
+            why.append(f"quantity '{qty_text}' is not a number above zero")
+
+        ticker = (option['ticker'] if option else cell(cells, 'instrument')).upper()
+        if not ticker:
+            why.append("instrument is empty")
+
+        if why:
+            problems.append(f"line {line}: " + "; ".join(why))
+            continue
+
+        instrument_type = 'OPTION' if is_option else 'STOCK'
+        multiplier = 100 if is_option else 1
+        opt = option or {'option_expiry': None, 'option_strike': None, 'option_type': None}
+        key = _option_pos_key(ticker, 'OPTION', opt['option_expiry'], opt['option_strike'],
+                              opt['option_type']) if is_option else None
+
+        if code in _RH_OPTION_CLOSE:
+            # Close whatever is held at zero: sell a long contract, buy back a short one.
+            net = held.get(key, 0)
+            if net > 0:
+                action = 'SOLD'
+            elif net < 0 or short_hint:
+                action = 'BOT'
+            else:
+                continue  # opened before anything in this file or the journal; nothing to close
+            price, amount, commission = 0.0, 0.0, 0.0
+        else:
+            action = 'BOT' if code in _RH_BUY else 'SOLD'
+            try:
+                price = abs(_num(cell(cells, 'price')))
+            except ValueError:
+                problems.append(f"line {line}: price '{cell(cells, 'price')}' is not a number")
+                continue
+            notional = price * qty * multiplier
+            if action == 'BOT':
+                notional = -notional
+            amount = round(notional, 2)
+            commission = 0.0
+            if cell(cells, 'amount'):
+                cash = clean_amount(cell(cells, 'amount'))
+                fee = round(notional - cash, 2)
+                if fee > 0:
+                    commission = fee
+                else:
+                    amount = cash  # price was rounded for display; trust the cash figure
+
+        if is_option:
+            held[key] = held.get(key, 0) + (qty if action == 'BOT' else -qty)
+
+        executions.append({
+            'action': action,
+            'qty': qty,
+            'ticker': ticker,
+            'price': price,
+            'instrument_type': instrument_type,
+            'option_expiry': opt['option_expiry'],
+            'option_strike': opt['option_strike'],
+            'option_type': opt['option_type'],
+            'date': date,
+            'iso_date': date,
+            'time': '',
+            'amount': round(amount, 2),
+            'commission': round(commission, 2),
+            'raw_description': f"{code} {qty} {ticker} @{price}",
+        })
+
+    if problems:
+        more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
+        raise ValueError(
+            f"{len(problems)} Robinhood trade row(s) could not be read, so nothing was imported{more}. "
+            + " | ".join(problems[:8])
+        )
+    return executions
+
+
+def parse_robinhood_csv(content: str, account_id: int, conn=None) -> tuple[list[dict], int]:
+    """Robinhood activity report pipeline. Same output contract as the other broker parsers."""
+    executions = parse_robinhood_rows(content, account_id, conn)
+    if not executions:
+        raise ValueError(
+            "No stock or option trades found in this Robinhood report. Check the date range "
+            "of the report covers your trades."
+        )
+    return build_trades_from_executions(executions, account_id, conn)
+
+
 # ── Broker dispatch ────────────────────────────────────────────────────────────
 
 BROKER_PARSERS = {
     'thinkorswim': parse_thinkorswim_csv,
     'ibkr': parse_ibkr_csv,
+    'robinhood': parse_robinhood_csv,
     'generic': parse_generic_csv,
 }
 
 BROKER_LABELS = {
     'thinkorswim': 'Thinkorswim',
     'ibkr': 'Interactive Brokers',
+    'robinhood': 'Robinhood',
     'generic': 'the generic template',
 }
 
@@ -1489,6 +1718,11 @@ def detect_broker(content: str) -> str | None:
         return 'ibkr'
     if 'DataDiscriminator' in content and re.search(r'^[\w /&-]+,(Header|Data),', head, re.MULTILINE):
         return 'ibkr'
+    for cells in csv.reader(io.StringIO(head)):
+        if any(c.strip() for c in cells):
+            if _robinhood_header(cells):
+                return 'robinhood'
+            break
     upper = head.upper()
     if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
             or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
@@ -1514,8 +1748,9 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None) -> t
         if not detected:
             raise ValueError(
                 "Could not recognise this CSV. Pick the broker from the dropdown, "
-                "export an account statement from Thinkorswim or an Activity "
-                "Statement from Interactive Brokers, or copy your fills into the "
+                "export an account statement from Thinkorswim, an Activity "
+                "Statement from Interactive Brokers or an activity report from "
+                "Robinhood, or copy your fills into the "
                 "generic template (Import page, 'Broker not listed?')."
             )
         key = detected
