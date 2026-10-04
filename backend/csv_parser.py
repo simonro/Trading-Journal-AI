@@ -396,8 +396,10 @@ def parse_trade_history_section(rows: list[list[str]], import_tz: str = IMPORT_L
         # see _to_exchange_time. date_part is kept in sync with iso_date so
         # every downstream field that reads either one sees the same, correct
         # value; a trade near midnight can legitimately move to the adjacent day.
+        # date_part stays in the statement's M/D/YY form, which trade_group keys
+        # are built from, so re-imports still match trades stored earlier.
         iso_date, time_part = _to_exchange_time(iso_date, time_part, import_tz)
-        date_part = iso_date
+        date_part = _raw_date(iso_date)
 
         if type_str in ('CALL', 'PUT'):
             instrument_type = 'OPTION'
@@ -554,7 +556,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
             continue
 
         parsed.update({
-            'date': iso_date_val,
+            'date': _raw_date(iso_date_val),
             'iso_date': iso_date_val,
             'time': time_val,
             'amount': amount,
@@ -617,7 +619,7 @@ def parse_futures_section_rows(rows: list[list[str]], import_tz: str = IMPORT_LO
         iso_trade_date, exec_time = _to_exchange_time(normalize_date(trade_date), exec_time, import_tz)
 
         parsed.update({
-            'date': iso_trade_date,
+            'date': _raw_date(iso_trade_date),
             'iso_date': iso_trade_date,
             'time': exec_time,
             'amount': amount,
