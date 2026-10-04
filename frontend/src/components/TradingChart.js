@@ -327,11 +327,17 @@ export default function TradingChart({
         }
         return match;
       };
+      // setMarkers snaps a time with no bar to the nearest loaded bar, so a fill
+      // from a day that isn't loaded (a multi-day trade's entry, on an intraday
+      // chart of the exit day) would show on the wrong day. Leave those out.
+      const firstTs = candleData[0].time;
+      const lastTs = candleData[candleData.length - 1].time;
       const markers = executions
         .filter(f => f.time && f.date)
         .map(f => {
           const ts = isWide ? findWideBarTs(f.date) : execToTs(f.date, f.time, bucketMin);
           if (ts == null) return null;
+          if (!isWide && (ts < firstTs || ts > lastTs)) return null;
           const isBuy = f.action === 'BOT';
           return {
             isBuy,
