@@ -135,7 +135,7 @@ APP_SETTINGS_DEFAULTS = {
     # The local timezone Thinkorswim's desktop app was running in when it
     # wrote a CSV export, used to convert fill times to exchange (Eastern)
     # time on import. See csv_parser.IMPORT_LOCAL_TZ for the parsing side.
-    "import_timezone": "Europe/Bucharest",
+    "import_timezone": "America/New_York",
 }
 
 

@@ -23,7 +23,7 @@ function parseExecs(trade) {
   try { return JSON.parse(raw); } catch { return []; }
 }
 
-function computeStats(trade) {
+export function computeStats(trade) {
   const execs = parseExecs(trade);
   const side = trade.side;
   const entryFills = execs.filter(e => side === 'LONG' ? e.action === 'BOT' : e.action === 'SOLD');

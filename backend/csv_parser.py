@@ -35,13 +35,14 @@ def normalize_date(date_str: str) -> str:
 
 # Thinkorswim's Account Statement export stamps every execution using the
 # desktop app's local system clock, not exchange time. A trader outside the
-# US (this app is configured for Berlin) gets fill times in their own
-# timezone, while everything downstream — chart candles from Alpaca, the
+# US gets fill times in their own timezone, while everything downstream — chart candles from Alpaca, the
 # hold-time math, session/day bucketing — assumes Eastern time, matching
 # the exchange. Converting once here, at parse time, keeps every timestamp
 # that reaches the database already in ET, so the rest of the app never
-# needs to know a conversion happened.
-IMPORT_LOCAL_TZ = 'Europe/Bucharest'
+# needs to know a conversion happened. The default is exchange time itself,
+# a no-op, so only users who pick another zone in Settings > General get
+# their fills shifted.
+IMPORT_LOCAL_TZ = 'America/New_York'
 EXCHANGE_TZ = 'America/New_York'
 
 

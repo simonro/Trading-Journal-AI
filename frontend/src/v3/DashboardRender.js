@@ -294,7 +294,13 @@ export default function DashboardRender(p) {
   const k = kpis || {};
   const days = k.daily_pnl || [];
   const net = k.total_net_pnl || 0;
-  const cents = Math.abs(net % 1).toFixed(2).slice(1);
+  // The headline shows dollars and cents separately, so split the value here
+  // rather than through money(): money() rounds to whole dollars, which would
+  // carry a >=50c fraction into the dollars (-17.57 showing as -$18.57).
+  // Working in whole cents lets .995 carry into the dollars correctly.
+  const netCents = Math.round(Math.abs(net) * 100);
+  const dollars = `${net < 0 ? '−$' : '+$'}${Math.trunc(netCents / 100).toLocaleString('en-US')}`;
+  const cents = `.${String(netCents % 100).padStart(2, '0')}`;
 
   const awin = Math.abs(k.avg_win || 0);
   const aloss = Math.abs(k.avg_loss || 0);
@@ -380,7 +386,7 @@ export default function DashboardRender(p) {
           <div>
             <p className="v3-acct">{accountLabel}{span ? ` · ${span}` : ''}</p>
             <h1 className={`v3-money ${tone(net)}`}>
-              {money(net)}<span className="cents">{cents}</span>
+              {dollars}<span className="cents">{cents}</span>
             </h1>
             <p className="v3-money-sub">
               <b>{(k.trading_days || 0).toLocaleString()} sessions</b>, {(k.total_trades || 0).toLocaleString()} trades.
