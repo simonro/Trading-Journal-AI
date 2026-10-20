@@ -266,6 +266,14 @@ Bug reports, broker samples and pull requests are welcome. [CONTRIBUTING.md](CON
 the setup, the tests to run and how to add a broker importer. Please report security problems
 privately, as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
+## More free tools from Tape to Edge
+
+Same rules for each one: free, MIT, runs on your own machine, and the build is on the [YouTube channel](https://www.youtube.com/@tapetoedge).
+
+- [Edge Scanner](https://github.com/simonro/edge-scanner): a real-time intraday stock scanner with a browser dashboard you lay out yourself.
+- [Edge GEX Lab](https://github.com/simonro/Edge-GEX-Lab): a live gamma exposure (GEX) map for SPY, QQQ, SPX, NDX and stocks, with walls, gamma flip and regime.
+- [AI Research Desk](https://github.com/simonro/ai-research-desk): three AI research teams debate one stock into swing and long-term calls.
+
 ## Who made this
 
 Simon, a day trader. I built this because the journals I was paying for made me fill in forms hours
