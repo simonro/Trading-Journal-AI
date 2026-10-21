@@ -282,8 +282,6 @@ to Claude Code, and the prompts are in the video description.
 
 - YouTube: [@tapetoedge](https://www.youtube.com/@tapetoedge), where I show what I build and how
 - X: [@tapetoedge](https://x.com/tapetoedge)
-- Newsletter: [tape-to-edge.beehiiv.com](https://tape-to-edge.beehiiv.com), a free community for
-  traders sharing the tools we make and the strategies we run. One email a week. Nothing for sale.
 
 I take no affiliate money from any broker or tool, and this app has no paid tier, no account and no
 telemetry. If it is useful, fork it.
