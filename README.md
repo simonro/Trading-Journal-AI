@@ -58,8 +58,8 @@ database; a calculation never downloads anything by itself.
 trades on real historical minute prices for SPY, QQQ and NVDA. Your journal database is
 not opened. After `setup.bat` and your Alpaca keys, double-click
 `scripts\launch_exitlab_demo.bat`, then open http://localhost:3020 and choose the
-"Exit Lab demo" account. The first run downloads about two minutes of prices. By hand
-(any OS, from the repo root with the virtualenv active):
+"Exit Lab demo" account. The first run takes about two minutes to download the prices.
+By hand on any OS, with the virtualenv active:
 
 ```bash
 # from the repo root
