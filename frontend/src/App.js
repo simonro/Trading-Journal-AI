@@ -14,6 +14,8 @@ import DailySummary from './components/DailySummary';
 import Reports from './components/Reports';
 import Help from './components/Help';
 import Settings from './components/Settings';
+import ExitLab from './components/ExitLab';
+import { DemoLabel } from './components/exitlab/shared';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
@@ -22,6 +24,8 @@ export default function App() {
   const [showAddTrade, setShowAddTrade] = useState(false);
   const [tradesFilter, setTradesFilter] = useState({ dateFrom: '', dateTo: '' });
   const [selectedTrade, setSelectedTrade] = useState(null);
+  const [detailTab, setDetailTab] = useState('Stats');
+  const [detailOrigin, setDetailOrigin] = useState('trades');
   const [tradeNavList, setTradeNavList] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   // Open Day Review on the most recent session, not on today. Today has no
@@ -67,7 +71,9 @@ export default function App() {
     setPage(p);
   };
 
-  const handleOpenDetail = (trade, list = []) => {
+  const handleOpenDetail = (trade, list = [], initialTab = 'Stats') => {
+    setDetailTab(initialTab);
+    setDetailOrigin(initialTab === 'Exits' ? 'exit-lab' : 'trades');
     setSelectedTrade(trade);
     setTradeNavList(list);
     setPage('trade-detail');
@@ -88,6 +94,7 @@ export default function App() {
       />
 
       <main className="app-main" id="main">
+        {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountId == null || a.id === selectedAccountId))} />}
         {page === 'dashboard' && (
           <Dashboard
             accountId={selectedAccountId}
@@ -111,9 +118,11 @@ export default function App() {
         {page === 'trade-detail' && selectedTrade && (
           <TradeDetail
             key={selectedTrade.id}
+            initialTab={detailTab}
+            backLabel={detailOrigin === 'exit-lab' ? 'Back to Exit Lab' : 'Back to trades'}
             trade={selectedTrade}
             tradeNavList={tradeNavList}
-            onBack={() => { setSelectedTrade(null); setPage('trades'); }}
+            onBack={() => { setSelectedTrade(null); setPage(detailOrigin); }}
             onTradeUpdate={(updated) => setSelectedTrade(updated)}
             onNavigate={(trade) => setSelectedTrade(trade)}
             onOpenDetail={handleOpenDetail}
@@ -144,6 +153,7 @@ export default function App() {
         {page === 'reports' && <Reports accountId={selectedAccountId} />}
         {page === 'help' && <Help />}
         {page === 'settings' && <Settings />}
+        {page === 'exit-lab' && <ExitLab accountId={selectedAccountId} accounts={accounts} onSelectAccount={setSelectedAccountId} onOpenDetail={handleOpenDetail} />}
       </main>
 
       <Brain accountId={selectedAccountId} open={brainOpen} onOpenChange={setBrainOpen} />

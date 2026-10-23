@@ -1,22 +1,22 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard, TrendingUp, BarChart2, BookOpen, Plus, ChevronDown,
-  CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, Settings as SettingsIcon,
+  CalendarDays, Check, X, Pencil, CalendarCheck, HelpCircle, Upload, Brain, FlaskConical, Settings as SettingsIcon,
 } from 'lucide-react';
 import { accountsApi } from '../api';
 import aiJournalLogo from '../assets/ai-journal-logo.png';
 
 // Every page stays one click away. Import, Brain and Add Trade live with the
-// account selector on the right, the rest are the labeled navigation.
+// account selector, Help and Settings on the right; seven pages keep their labels.
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'trades', label: 'Trade View', icon: TrendingUp },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'day-review', label: 'Day Review', icon: CalendarCheck },
   { id: 'reports', label: 'Reports', icon: BarChart2 },
+  { id: 'exit-lab', label: 'Exit Lab', icon: FlaskConical },
   { id: 'diary', label: 'Diary', icon: BookOpen },
-  { id: 'help', label: 'Help', icon: HelpCircle },
-  { id: 'settings', label: 'Settings', icon: SettingsIcon },
+
 ];
 
 const NEW_ACCOUNT_DEFAULT = { name: '', type: 'day_trading', color: '#6366f1', broker: 'Thinkorswim' };
@@ -243,15 +243,18 @@ export default function AppHeader({
               type="button"
               onClick={() => onNavigate(id)}
               className={`app-nav-item${activeId === id ? ' active' : ''}`}
+              title={label}
+              aria-label={label}
               aria-current={activeId === id ? 'page' : undefined}
             >
               <Icon size={16} aria-hidden="true" />
-              {label}
+              <span className="app-nav-label">{label}</span>
             </button>
           ))}
         </nav>
 
         <div className="app-actions">
+          {[["help", "Help", HelpCircle], ["settings", "Settings", SettingsIcon]].map(([id, label, Icon]) => <button key={id} type="button" className={`btn btn-ghost btn-icon${page === id ? ' active' : ''}`} aria-label={label} title={label} aria-current={page === id ? 'page' : undefined} onClick={() => onNavigate(id)}><Icon size={18} aria-hidden="true" /></button>)}
           <button
             type="button"
             className={`btn btn-ghost${brainOpen ? ' active' : ''}`}

@@ -6,6 +6,20 @@ export const API_BASE = (process.env.REACT_APP_API_URL ?? 'http://localhost:8010
 
 const api = axios.create({ baseURL: API_BASE });
 
+export const exitlabApi = {
+  history: (body) => api.post('/api/exitlab/history', body),
+  simpleReplay: (id) => api.get(`/api/exitlab/trades/${id}/simple`),
+  settings: () => api.get('/api/exitlab/settings'),
+  saveSettings: (body) => api.put('/api/exitlab/settings', body),
+  rules: () => api.get('/api/exitlab/rules'),
+  assignRule: (id, setups) => api.patch(`/api/exitlab/rules/${id}`, { applies_to_setups: setups }),
+  showRule: (id, show) => api.patch(`/api/exitlab/rules/${id}`, { show_in_tables: show }),
+  saveRule: (rule) => api.post('/api/exitlab/rules', rule),
+  readiness: (accountId, feed) => api.get('/api/exitlab/readiness', { params: { account_id: accountId, feed } }),
+  stop: (id, body) => api.post(`/api/exitlab/trades/${id}/stops`, body),
+  fetchBars: (body) => api.post('/api/exitlab/bars/fetch', body),
+};
+
 export const accountsApi = {
   list: () => api.get('/api/accounts'),
   create: (data) => api.post('/api/accounts', data),

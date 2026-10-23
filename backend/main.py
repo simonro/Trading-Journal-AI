@@ -29,6 +29,7 @@ from ai_analysis import (
 )
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
+from exitlab.api import router as exitlab_router
 
 load_dotenv()
 
@@ -70,6 +71,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
+app.include_router(exitlab_router)
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
@@ -688,7 +690,7 @@ def update_trade(trade_id: int, data: dict, conn: sqlite3.Connection = Depends(g
                'instrument_type', 'option_expiry', 'option_strike', 'option_type'}
     updates = {k: v for k, v in data.items() if k in allowed}
 
-    if trade.get('source') == 'imported':
+    if trade.get('source') in ('imported', 'demo'):
         updates['source'] = 'edited'
 
     if updates:

@@ -1,7 +1,10 @@
+import { excursionText } from '../utils/excursions';
 import { useState, useEffect } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
 import { tradesApi, chartApi } from '../api';
 import TradingChart from './TradingChart';
+import TradeExits from './exitlab/TradeExits';
+import { DemoLabel } from './exitlab/shared';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
 
 const fmt$ = (v) => {
@@ -209,7 +212,7 @@ function TagBadge({ tag, onDelete }) {
 
 // ── What If helpers ───────────────────────────────────────────────────────────
 
-const TABS = ['Stats', 'Strategy', 'Tags', 'Executions', 'What If'];
+const TABS = ['Stats', 'Strategy', 'Tags', 'Executions', 'What If', 'Exits'];
 
 const SCENARIOS = [
   { label: '+5 min',    offsetMin: 5 },
@@ -322,9 +325,9 @@ function DaySidebar({ currentTrade, onOpenDetail }) {
   );
 }
 
-export default function TradeDetail({ trade: initialTrade, tradeNavList = [], onBack, onTradeUpdate, onNavigate, onOpenDetail }) {
+export default function TradeDetail({ trade: initialTrade, tradeNavList = [], onBack, onTradeUpdate, onNavigate, onOpenDetail, initialTab = 'Stats', backLabel = 'Back to trades' }) {
   const [trade, setTrade] = useState(initialTrade);
-  const [tab, setTab] = useState('Stats');
+  const [tab, setTab] = useState(initialTab);
   const [analysis, setAnalysis] = useState(null);
   const [tags, setTags] = useState([]);
 
@@ -501,6 +504,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const stats = computeStats(trade);
 
   useEffect(() => {
+    if (tab === 'Exits') return;
     if (whatIfBars !== null) return;
     if (!stats.isClosed) { setWhatIfBars([]); return; }
     setWhatIfLoading(true);
@@ -508,7 +512,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       .then(r => setWhatIfBars(r.data.bars || []))
       .catch(() => setWhatIfBars([]))
       .finally(() => setWhatIfLoading(false));
-  }, [whatIfBars, trade.ticker, trade.date, stats.isClosed]);
+  }, [whatIfBars, trade.ticker, trade.date, stats.isClosed, tab]);
 
   const pnl = trade.net_pnl ?? 0;
 
@@ -533,11 +537,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   };
 
   return (
-    <div>
+    <div className={tab === 'Exits' ? 'td-exits' : undefined}>
       {/* Back nav + prev/next */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <button type="button" onClick={onBack} className="btn btn-ghost" style={{ paddingLeft: 8 }}>
-          <ArrowLeft size={16} /> Back to trades
+          <ArrowLeft size={16} /> {backLabel}
         </button>
       </div>
 
@@ -575,6 +579,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           </button>
         </> : null}
       >
+        {tab !== 'Exits' && <DemoLabel show={trade.source === 'demo'} />}
         <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
           <span className="chip">{trade.side}</span>
           <span className="chip">{stats.isClosed ? 'Closed' : 'Open'}</span>
@@ -584,7 +589,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
       </PageHeader>
 
-      <KpiStrip label="Trade metrics">
+      {tab !== 'Exits' && <KpiStrip label="Trade metrics">
         <KpiCell
           label="Net P&L"
           value={<MoneyValue value={pnl} />}
@@ -605,7 +610,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         <KpiCell label="Avg exit" value={<span className="num">{stats.avgExit ? `$${stats.avgExit.toFixed(2)}` : 'n/a'}</span>} />
         <KpiCell label="Quantity" value={<span className="num">{stats.totalQty || 'n/a'}</span>} foot={trade.commissions ? <>Comm <span className="num">{fmt$(trade.commissions)}</span></> : null} />
         <KpiCell label="Risk" value={<span className="num">{tradeRisk ? fmt$(tradeRisk) : 'n/a'}</span>} />
-      </KpiStrip>
+      </KpiStrip>}
 
       {/* Layout: session list | chart, then tabs beside notes */}
       <div className="td-grid">
@@ -614,7 +619,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         </div>
 
         <div className="td-main">
-          <section className="card">
+          {tab !== 'Exits' && <section className="card">
             <TradingChart
               ticker={trade.ticker}
               date={trade.date}
@@ -623,7 +628,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
               analysis={analysis}
               height={520}
             />
-          </section>
+          </section>}
 
           <div className="td-lower">
         {/* Middle: tabs + content */}
@@ -653,6 +658,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           </div>
 
           <div style={{ padding: '6px 20px 20px' }} role="tabpanel" id="td-panel" aria-labelledby={`td-tab-${tab}`}>
+            {tab === 'Exits' && <TradeExits trade={trade} />}
 
             {/* ── Stats tab ─────────────────────────────────────────────── */}
             {tab === 'Stats' && (
@@ -734,17 +740,17 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                         and how much of the favourable move you actually kept. */}
                     <StatRow
                       label="Max Favourable (MFE)"
-                      value={trade.mfe_pct == null ? null : `+${Number(trade.mfe_pct).toFixed(2)}%`}
+                      value={excursionText(trade, 'mfe_pct')}
                       valueColor="var(--result-pos)"
                     />
                     <StatRow
                       label="Max Adverse (MAE)"
-                      value={trade.mae_pct == null ? null : `${Number(trade.mae_pct).toFixed(2)}%`}
+                      value={excursionText(trade, 'mae_pct')}
                       valueColor="var(--result-neg)"
                     />
                     <StatRow
                       label="Exit Efficiency"
-                      value={trade.exit_efficiency == null ? null : `${Number(trade.exit_efficiency).toFixed(1)}%`}
+                      value={excursionText(trade, 'exit_efficiency', 1)}
                       valueColor={trade.exit_efficiency == null ? undefined
                         : trade.exit_efficiency < 0 ? 'var(--result-neg)'
                           : trade.exit_efficiency >= 50 ? 'var(--result-pos)' : 'var(--caution)'}

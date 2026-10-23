@@ -23,6 +23,55 @@ synthetic demo seed, not anyone's real trades.
 
 ![The dashboard: net P&L over a live equity curve, every session as one strip, measures against your goals, and the month beside your recent trades](docs/screenshot-dashboard.png)
 
+## Exit Lab
+
+Exit Lab replays your completed stock trades on historical one-minute prices and shows
+what other exits would have done with the same entry, size and stop. It describes your
+history; it does not predict future results and it places no orders.
+
+- **Exits tab on every trade.** A replay chart with your actual fills and each rule's
+  exits, and an outcome table in R and in dollars: Actual, 1R target, 2R target, Hold to
+  close, Breakeven after +1R, and any rule you saved.
+- **Exit Lab page.** The same rules compared across all your trades, filtered by date,
+  symbol, setup and side, each against your own exits on the same trades. Rules can be
+  assigned to the setups they are meant for.
+- **Advanced rule builder.** R targets, a VWAP touch target, exits after N minutes, at a
+  clock time or at the session close, up to 3 scale-out tranches, R-step and ATR trailing
+  stops, and VWAP, EMA 9/20 and 5-minute RS/RW indicator exits.
+
+The rules it plays by:
+
+- The stop is the trade's **Stop Loss** in the journal. A trade without one asks you to
+  enter it, and that writes the same journal field.
+- When a one-minute candle touches the stop and a target, the stop fills first. A gap
+  through the stop fills at the worse open.
+- Modeled commissions and slippage are zero. Your actual dollars keep the journal's net P&L.
+- Trades without complete regular-hours prices are left out with the reason, never filled in.
+
+**Prices.** Exit Lab needs historical minute bars from Alpaca. Add `APCA_API_KEY_ID` and
+`APCA_API_SECRET_KEY` to `backend/.env` (a free Alpaca account works: it serves SIP history
+older than 15 minutes), then press **Load prices** in Exit Lab. Prices are cached in your
+database; a calculation never downloads anything by itself.
+
+**Try it on synthetic trades.** The demo builds its own database,
+`backend/exitlab_demo.db`, labeled **Synthetic trades, historical market prices**: generated
+trades on real historical minute prices for SPY, QQQ and NVDA. Your journal database is
+not opened. After `setup.bat` and your Alpaca keys, double-click
+`scripts\launch_exitlab_demo.bat`, then open http://localhost:3020 and choose the
+"Exit Lab demo" account. The first run downloads about two minutes of prices. By hand
+(any OS, from the repo root with the virtualenv active):
+
+```bash
+python scripts/seed_exitlab_demo.py --fetch   # once: downloads prices into backend/exitlab_local.db
+python scripts/reset_exitlab_demo.py          # builds backend/exitlab_demo.db (--replace to rebuild)
+cd backend && DATABASE_PATH=exitlab_demo.db python -m uvicorn main:app --port 8020
+cd frontend && PORT=3020 REACT_APP_API_URL=http://localhost:8020 npm start
+```
+
+(On Windows `cmd`, use `set DATABASE_PATH=exitlab_demo.db` and `set PORT=3020` first.)
+The [Exit Lab guide](docs/README.md) and the [engine notes](backend/exitlab/README.md)
+cover eligibility, fill order and the API.
+
 ## Privacy and your data
 
 Trading Journal AI is designed as a **local-first application**.
@@ -50,8 +99,8 @@ The core journal, trade reconstruction, P&L calculations, reports, and statistic
 
 **Market data (Alpaca)**
 
-If you add Alpaca keys, the trade chart asks Alpaca for price bars: the ticker and the date range,
-nothing about your trades or account.
+If you add Alpaca keys, the trade chart and Exit Lab's **Load prices** ask Alpaca for price bars:
+the ticker (plus SPY for Exit Lab) and the date range, nothing about your trades or account.
 
 ### API keys
 
@@ -79,6 +128,7 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
   every session in the period as a single strip you can scrub, measures against your own goals,
   the month beside your recent trades and open positions, and a tabbed breakdown by time of day,
   day of week and strategy
+- **Exit Lab**: replays your stock trades on minute prices to compare alternative exits in R and dollars, per trade and across all trades
 - **Trade View**: every trade with executions, playbook setup tags, MFE/MAE and exit efficiency, its AI analysis and an intraday chart with your fills on it
 - **Reports**: breakdowns by day of week, time of day, hold time, setup, grade, symbol, side, emotion,
   plus a Sources & Tags tab that scores where your ideas come from. One switch flips the whole page
@@ -246,7 +296,8 @@ Everything is optional; the app runs without any keys and tells you exactly whic
 | Variable | Enables |
 |---|---|
 | `ANTHROPIC_API_KEY` | Diary analysis, Day Review, Weekly Summary, Insights, and the Brain chat |
-| `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Intraday price charts on each trade (free Alpaca account works) |
+| `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Intraday price charts on each trade and Exit Lab's historical minute prices (free Alpaca account works) |
+| `ALPACA_ENV_FILE` | Optional. Path to another `.env` file that holds the Alpaca keys for Exit Lab. When set, Exit Lab reads its keys only from that file. |
 | `ALPACA_DATA_FEED` | Optional, defaults to `iex` (free-tier data). Set to `sip` only if your key has a paid market-data subscription. |
 | `FRONTEND_ORIGINS` | Optional. Any `localhost`/`127.0.0.1` port is already accepted; add comma-separated origins here only for a frontend served from another host. |
 

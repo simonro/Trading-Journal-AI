@@ -370,7 +370,7 @@ def write_db(trades, diary):
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (t["account_id"], t["trade_group"], t["date"], t["ticker"], "STOCK",
               t["side"], t["gross"], t["net"], t["commissions"],
-              json.dumps(t["executions"]), None, None, None, "imported",
+              json.dumps(t["executions"]), None, None, None, "demo",
               t["setup"], t["grade"], "manual", t["mfe"], t["mae"], t["eff"]))
 
         if rng.random() < 0.75:

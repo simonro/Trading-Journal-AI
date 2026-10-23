@@ -113,10 +113,15 @@ const nav = () => screen.getByRole('navigation', { name: 'Main' });
 
 test('header keeps every page, Settings, Import, Add Trade and a labeled Brain entry visible', async () => {
   await renderApp();
-  for (const label of ['Dashboard', 'Trade View', 'Calendar', 'Day Review', 'Reports', 'Diary', 'Help', 'Settings']) {
+  for (const label of ['Dashboard', 'Trade View', 'Calendar', 'Day Review', 'Reports', 'Exit Lab', 'Diary']) {
     expect(within(nav()).getByRole('button', { name: label })).toBeVisible();
+    expect(within(nav()).getByText(label)).toBeVisible();
   }
   const banner = screen.getByRole('banner');
+  for (const label of ['Help', 'Settings']) {
+    expect(within(banner).getByRole('button', { name: label })).toBeVisible();
+    expect(within(nav()).queryByRole('button', { name: label })).not.toBeInTheDocument();
+  }
   expect(within(banner).getByRole('button', { name: /^Import$/ })).toBeVisible();
   expect(within(banner).getByRole('button', { name: /Add Trade/ })).toBeVisible();
   expect(within(banner).getByRole('button', { name: /Brain/ })).toBeVisible();
@@ -175,7 +180,7 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   expect(within(tablist).getByRole('tab', { name: 'Setups & Strategy' })).toHaveAttribute('aria-selected', 'true');
 });
 
-test('Trade View opens Trade Details with all five tabs, back and previous/next', async () => {
+test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
   await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
@@ -185,7 +190,7 @@ test('Trade View opens Trade Details with all five tabs, back and previous/next'
 
   const tablist = await screen.findByRole('tablist', { name: 'Trade review sections' });
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Stats', 'Strategy', 'Tags', 'Executions', 'What If']);
+  expect(names).toEqual(['Stats', 'Strategy', 'Tags', 'Executions', 'What If', 'Exits']);
   expect(screen.getByRole('button', { name: /Back to trades/ })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Previous trade/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: /Next trade/ })).toBeEnabled();
@@ -215,7 +220,7 @@ test('Import keeps broker CSV import and diary analysis, with keyboard dropzones
 
 test('Help lists the metric reference and the feature guide', async () => {
   await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Help' }));
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Help' }));
   expect(await screen.findByRole('heading', { name: 'Help and Reference' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: 'Dashboard KPIs' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: 'Features' })).toBeInTheDocument();
@@ -249,7 +254,7 @@ test('Day Review keeps the loss-streak alert and its Dismiss control', async () 
 
 test('Settings has General, Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {
   await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   expect(within(tablist).getAllByRole('tab').map(t => t.textContent.replace(/\d+/g, '').trim()))
     .toEqual(['General', 'Strategies', 'Sources', 'Tags']);
@@ -266,7 +271,7 @@ test('Settings has General, Strategies, Sources and Tags sections, and Tags leav
 
 test('Settings merges one strategy into another', async () => {
   await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Merge Continuation RS into another strategy' }));
   fireEvent.change(screen.getByRole('combobox', { name: /Merge "Continuation RS" into/ }), { target: { value: 'VWAP Cross' } });
   fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
@@ -278,7 +283,7 @@ test('Settings merges one strategy into another', async () => {
 
 test('Settings delete asks to reassign and can leave trades blank', async () => {
   await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   fireEvent.click(await screen.findByRole('tab', { name: /Sources/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Delete OneOption' }));
   expect(screen.getByRole('combobox', { name: /1 trade use "OneOption". Reassign them to/ })).toHaveValue('');

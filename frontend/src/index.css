@@ -282,7 +282,7 @@ summary:focus-visible {
   justify-content: flex-end;
 }
 
-@media (max-width: 1500px) {
+@media (max-width: 1659px) {
   :root { --sticky-offset: 134px; }
   .app-header-inner {
     grid-template-columns: auto minmax(0, 1fr);

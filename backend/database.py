@@ -149,6 +149,8 @@ def init_db():
         except Exception:
             pass
 
+    from exitlab.schema import migrate
+    migrate(conn)
     conn.close()
 
 

@@ -1,3 +1,4 @@
+import { excursionText } from '../utils/excursions';
 import { useState } from 'react';
 import { tradesApi } from '../api';
 import { ChevronRight, Trash2 } from 'lucide-react';
@@ -151,6 +152,13 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
   }
   /** MFE / MAE / exit efficiency — how much of the move was there, and how much was taken. */
   function Excursion({ trade }) {
+    if (trade.excursion_source === 'computed_bound') {
+      return <span className="num" title="Computed bounds from partial-minute bars" style={{ display: 'grid', gap: 3, fontSize: 12 }}>
+        <span className="pos">MFE {excursionText(trade, 'mfe_pct') || 'n/a'}</span>
+        <span className="neg">MAE {excursionText(trade, 'mae_pct') || 'n/a'}</span>
+        <span>Efficiency {excursionText(trade, 'exit_efficiency', 1) || 'n/a'}</span>
+      </span>;
+    }
     const { mfe_pct: mfe, mae_pct: mae, exit_efficiency: eff } = trade;
     if (mfe == null && mae == null) {
       return <span className="text-faint" style={{ fontSize: 13 }}>—</span>;

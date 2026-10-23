@@ -6,3 +6,6 @@ httpx==0.28.1
 anthropic>=1.8.0
 python-dotenv==1.2.3
 tzdata
+
+# Exit Lab exchange sessions and early closes
+pandas-market-calendars==5.5.0
