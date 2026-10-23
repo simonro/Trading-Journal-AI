@@ -1,10 +1,10 @@
-fastapi==0.141.1
+fastapi==0.151.0
 uvicorn[standard]==0.54.0
 python-multipart==0.0.32
 aiofiles==25.1.0
 httpx==0.28.1
 anthropic>=1.8.0
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 tzdata
 
 # Exit Lab exchange sessions and early closes
