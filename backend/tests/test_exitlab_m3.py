@@ -1,4 +1,4 @@
-"""Regression cases from the M1 and M2 code reviews, with explicit cash flows."""
+"""Regression cases for entry-minute bounds and fill range checks, with explicit cash flows."""
 from dataclasses import replace
 from datetime import timedelta
 import json

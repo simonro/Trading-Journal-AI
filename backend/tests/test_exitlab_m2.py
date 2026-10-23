@@ -1,4 +1,4 @@
-"""M2 contracts: safe readiness preflight, demo repeatability, credential aliases."""
+"""Contracts: safe readiness preflight, demo repeatability, credential aliases."""
 from pathlib import Path
 import sys
 import pytest

@@ -62,13 +62,19 @@ not opened. After `setup.bat` and your Alpaca keys, double-click
 (any OS, from the repo root with the virtualenv active):
 
 ```bash
-python scripts/seed_exitlab_demo.py --fetch   # once: downloads prices into backend/exitlab_local.db
+# from the repo root
+python scripts/seed_exitlab_demo.py --fetch   # downloads prices into backend/exitlab_local.db
 python scripts/reset_exitlab_demo.py          # builds backend/exitlab_demo.db (--replace to rebuild)
-cd backend && DATABASE_PATH=exitlab_demo.db python -m uvicorn main:app --port 8020
-cd frontend && PORT=3020 REACT_APP_API_URL=http://localhost:8020 npm start
+
+# terminal 1, from backend/
+DATABASE_PATH=exitlab_demo.db python -m uvicorn main:app --port 8020
+
+# terminal 2, from frontend/
+PORT=3020 REACT_APP_API_URL=http://localhost:8020 npm start
 ```
 
-(On Windows `cmd`, use `set DATABASE_PATH=exitlab_demo.db` and `set PORT=3020` first.)
+On Windows `cmd`, set the variables first: `set DATABASE_PATH=exitlab_demo.db` in terminal 1,
+and `set PORT=3020` plus `set REACT_APP_API_URL=http://localhost:8020` in terminal 2.
 The [Exit Lab guide](docs/README.md) and the [engine notes](backend/exitlab/README.md)
 cover eligibility, fill order and the API.
 

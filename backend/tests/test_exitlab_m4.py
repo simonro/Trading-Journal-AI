@@ -1,4 +1,4 @@
-"""M4 regressions: backfill contamination, period promotion and chart sample counts."""
+"""Regressions: backfill contamination, period promotion and chart sample counts."""
 from dataclasses import replace
 import json
 import pytest

@@ -36,42 +36,55 @@ def main():
     staging = dest.with_name(dest.stem+"_building.db")
     if staging.exists():
         parser.error("Staging database exists; inspect it before retrying")
-    os.environ["DATABASE_PATH"] = str(staging)
-    sys.path.insert(0, str(ROOT/"backend"))
-    import database
-    database.init_db()
-    conn = database.get_db()
-    with closing(sqlite3.connect(cache.as_uri()+"?mode=ro", uri=True)) as source:
-        rows = source.execute("SELECT * FROM market_bars").fetchall()
-        with conn:
-            conn.executemany("INSERT INTO market_bars VALUES("+",".join("?" for _ in range(11))+")", rows)
-    # Read through SQLite so an open source DB's WAL is included consistently.
-    # No analysis runs, locks or cohort exposure are copied to the fresh demo.
-    if args.rules_from.is_file():
-        with closing(sqlite3.connect(args.rules_from.resolve().as_uri()+"?mode=ro", uri=True)) as source:
-            source.row_factory = sqlite3.Row
-            source.execute("BEGIN")
-            saved = [dict(r) for r in source.execute("SELECT * FROM exit_rules ORDER BY id")]
+    conn = None
+    try:
+        os.environ["DATABASE_PATH"] = str(staging)
+        sys.path.insert(0, str(ROOT/"backend"))
+        import database
+        database.init_db()
+        conn = database.get_db()
+        with closing(sqlite3.connect(cache.as_uri()+"?mode=ro", uri=True)) as source:
+            rows = source.execute("SELECT * FROM market_bars").fetchall()
             with conn:
-                for rule in saved:
-                    if rule['is_preset']:
-                        conn.execute("UPDATE exit_rules SET applies_to_setups=? WHERE is_preset=1 AND hash=?",
-                                     (rule.get('applies_to_setups', 'null'), rule['hash']))
-                    else:
-                        conn.execute("""INSERT INTO exit_rules(id,name,json,hash,created_at,is_preset,show_in_tables,applies_to_setups)
-                            VALUES(?,?,?,?,?,0,?,?)""", (rule['id'], rule['name'], rule['json'], rule['hash'], rule['created_at'],
-                            rule.get('show_in_tables', 1), rule.get('applies_to_setups', 'null')))
-            print(f"Preserved {sum(not r['is_preset'] for r in saved)} custom rules and preset assignments")
-    conn.close()
-    command = [sys.executable, str(ROOT/"scripts"/"seed_exitlab_demo.py"), "--database", str(staging)]
-    if args.report:
-        command += ["--report", str(args.report.resolve())]
-    subprocess.run(command, check=True)
-    with closing(sqlite3.connect(staging)) as check:
-        check.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        check.execute("PRAGMA journal_mode=DELETE")
-        assert check.execute("SELECT count(*) FROM trades").fetchone()[0] > 0
-    os.replace(staging, dest)
+                conn.executemany("INSERT INTO market_bars VALUES("+",".join("?" for _ in range(11))+")", rows)
+        # Read through SQLite so an open source DB's WAL is included consistently.
+        # No analysis runs, locks or cohort exposure are copied to the fresh demo.
+        if args.rules_from.is_file():
+            with closing(sqlite3.connect(args.rules_from.resolve().as_uri()+"?mode=ro", uri=True)) as source:
+                source.row_factory = sqlite3.Row
+                source.execute("BEGIN")
+                saved = [dict(r) for r in source.execute("SELECT * FROM exit_rules ORDER BY id")]
+                with conn:
+                    for rule in saved:
+                        if rule['is_preset']:
+                            conn.execute("UPDATE exit_rules SET applies_to_setups=? WHERE is_preset=1 AND hash=?",
+                                         (rule.get('applies_to_setups', 'null'), rule['hash']))
+                        else:
+                            conn.execute("""INSERT INTO exit_rules(id,name,json,hash,created_at,is_preset,show_in_tables,applies_to_setups)
+                                VALUES(?,?,?,?,?,0,?,?)""", (rule['id'], rule['name'], rule['json'], rule['hash'], rule['created_at'],
+                                rule.get('show_in_tables', 1), rule.get('applies_to_setups', 'null')))
+                print(f"Preserved {sum(not r['is_preset'] for r in saved)} custom rules and preset assignments")
+        conn.close()
+        command = [sys.executable, str(ROOT/"scripts"/"seed_exitlab_demo.py"), "--database", str(staging)]
+        if args.report:
+            command += ["--report", str(args.report.resolve())]
+        subprocess.run(command, check=True)
+        with closing(sqlite3.connect(staging)) as check:
+            check.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            check.execute("PRAGMA journal_mode=DELETE")
+            if not check.execute("SELECT count(*) FROM trades").fetchone()[0]:
+                raise SystemExit("No demo trades were built. Run scripts/seed_exitlab_demo.py --fetch first.")
+        os.replace(staging, dest)
+    except BaseException:
+        # A failed attempt removes only its own staging files, so a re-run can start clean.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(staging)+suffix).unlink(missing_ok=True)
+        raise
     print(f"Fresh synthetic demo: {dest}")
 
 

@@ -19,9 +19,9 @@ python scripts\reset_exitlab_demo.py
 if errorlevel 1 goto :fail
 
 :start
-start "Exit Lab demo - Backend" cmd /k "cd /d %~dp0..\backend && set DATABASE_PATH=exitlab_demo.db&& python -m uvicorn main:app --port 8020"
+start "Exit Lab demo - Backend" /d "%CD%\backend" cmd /k "set DATABASE_PATH=exitlab_demo.db&& python -m uvicorn main:app --port 8020"
 timeout /t 2 /nobreak >nul
-start "Exit Lab demo - Frontend" cmd /k "cd /d %~dp0..\frontend && set PORT=3020&& set REACT_APP_API_URL=http://localhost:8020&& npm start"
+start "Exit Lab demo - Frontend" /d "%CD%\frontend" cmd /k "set PORT=3020&& set REACT_APP_API_URL=http://localhost:8020&& npm start"
 
 echo Exit Lab demo backend starting on http://localhost:8020
 echo Exit Lab demo frontend starting on http://localhost:3020
