@@ -50,8 +50,11 @@ The rules it plays by:
 
 **Prices.** Exit Lab needs historical minute bars from Alpaca. Add `APCA_API_KEY_ID` and
 `APCA_API_SECRET_KEY` to `backend/.env` (a free Alpaca account works: it serves SIP history
-older than 15 minutes), then press **Load prices** in Exit Lab. Prices are cached in your
-database; a calculation never downloads anything by itself.
+older than 15 minutes), then press **Load missing prices** in Exit Lab. One background job
+fetches every session and warm-up window your trades are missing, with a progress bar and a
+plain list of any that failed. Opening a trade's Exits tab also loads that trade's missing
+prices once; its **Load prices** link is the retry. Prices are cached in your database; a
+calculation never downloads anything by itself.
 
 **Try it on synthetic trades.** The demo builds its own database,
 `backend/exitlab_demo.db`, labeled **Synthetic trades, historical market prices**: generated
@@ -136,7 +139,7 @@ The core journal, trade reconstruction, P&L calculations, reports, and statistic
 
 **Market data (Alpaca)**
 
-If you add Alpaca keys, the trade chart and Exit Lab's **Load prices** ask Alpaca for price bars:
+If you add Alpaca keys, the trade chart and Exit Lab's **Load missing prices** and **Load prices** ask Alpaca for price bars:
 the ticker (plus SPY for Exit Lab) and the date range, nothing about your trades or account.
 
 **Update check (GitHub)**

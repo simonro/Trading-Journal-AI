@@ -18,6 +18,8 @@ export const exitlabApi = {
   readiness: (accountId, feed) => api.get('/api/exitlab/readiness', { params: { account_id: accountId, feed } }),
   stop: (id, body) => api.post(`/api/exitlab/trades/${id}/stops`, body),
   fetchBars: (body) => api.post('/api/exitlab/bars/fetch', body),
+  loadMissing: (accountId) => api.post('/api/exitlab/bars/load-missing', { account_id: accountId }),
+  loadMissingStatus: () => api.get('/api/exitlab/bars/load-missing/status'),
 };
 
 export const accountsApi = {
