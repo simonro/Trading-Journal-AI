@@ -3,6 +3,7 @@
 [![CI](https://github.com/simonro/Trading-Journal-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/simonro/Trading-Journal-AI/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/simonro/Trading-Journal-AI)](https://github.com/simonro/Trading-Journal-AI/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Watch on YouTube](https://img.shields.io/badge/Watch%20on-YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
 A trading journal that runs on your own machine. Import your broker's CSV and it rebuilds your
 round-trip trades, tracks the numbers that matter (win rate, profit factor, expectancy, drawdown,
@@ -215,6 +216,8 @@ or delete one and reassign its trades.
 ![Settings: the strategy, source and tag library with rename, merge and delete](docs/screenshot-settings.png)
 
 ## Watch the walkthrough
+
+[![Watch on YouTube](https://img.shields.io/badge/Watch%20on-YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
 [![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/video-thumbnail.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
