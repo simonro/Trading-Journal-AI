@@ -407,6 +407,15 @@ export default function Reports({ accountId, onOpenDetail, initial }) {
                     <h2 className="v3-h">Scaled out vs all-or-nothing</h2>
                   </div>
                   <Breakdown view={view} rows={leaks.management?.by_management} labelHead="Management" height={200} />
+                  {leaks.management?.by_mistake?.length > 0 && (
+                    <>
+                      <div className="lk-group-head">
+                        <h2 className="v3-h">Mistake tags</h2>
+                        <p className="v3-h-sub">Logged after the trade and mostly about what happened in it, so they are shown here and never ranked as a leak.</p>
+                      </div>
+                      <Breakdown view={view} rows={leaks.management.by_mistake} labelHead="Mistake" height={200} />
+                    </>
+                  )}
                 </section>
               </Leaks>
             )

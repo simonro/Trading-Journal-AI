@@ -265,7 +265,7 @@ export default function Leaks({ data, params, onOpenDetail, children }) {
 
   const need = () => setWantTrades(true);
   const open = (t, list) => onOpenDetail && onOpenDetail(t, list);
-  const say = (f) => explain.sentences[f.id];
+  const say = (f) => explain.sentences[f.key || f.id];
 
   const headline = useMemo(() => {
     if (!data?.leaks?.length) return null;

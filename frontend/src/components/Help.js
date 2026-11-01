@@ -108,7 +108,7 @@ const METRICS = [
       {
         name: 'Leak',
         formula: 'A group of 20+ trades sharing one thing known at entry whose net P&L is below zero',
-        description: 'Groups come from entry time, trade number of the day, losses just before, how long after a loss you got back in, how the day stood, size against your usual for that ticker, instrument, side, weekday, setup, and diary fields. Hold time is an outcome, so it is shown under Trade management instead.',
+        description: 'Groups come from entry time, trade number of the day, losses just before, how long after a loss you got back in, how the day stood, size against your usual for that ticker, instrument, side, weekday, setup, and the diary's strategy, source and emotion. Hold time and mistake tags (logged after the trade) are shown under Trade management instead, never ranked.',
         why: 'A leak is something you could have skipped when you entered, and its cost is what skipping it would have saved.',
         target: null,
       },
