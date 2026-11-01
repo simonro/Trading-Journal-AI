@@ -194,3 +194,37 @@ def test_fetch_clips_a_window_into_the_last_15_minutes_instead_of_refusing(db):
     assert timestamp(calls[0]["end"]) <= now - timedelta(minutes=14)  # a minute may tick over
     with pytest.raises(ValueError, match="not available yet"):
         cache.fetch(db, "FIXTURE", now - timedelta(minutes=5), now + timedelta(hours=1), client=client)
+
+
+def test_a_failed_window_is_requested_once_per_job(monkeypatch):
+    calls = []
+
+    def failing(conn, symbol, start, end, feed, client=None):
+        calls.append((symbol, start, end))
+        raise ValueError("Alpaca refused the request")
+
+    monkeypatch.setattr(autoload, "fetch", failing)
+    monkeypatch.setattr(autoload, "http_client", lambda: _Closable())
+    window = ("SPY", "2026-09-01T13:30:00+00:00", "2026-09-01T20:00:00+00:00")
+    items = [{"trade_id": i, "ticker": "AAA", "date": "2026-09-01", "windows": [window]} for i in range(5)]
+    autoload._state.update(running=True, done=0, failed=0, failures=[])
+    autoload._run(items, "sip", lambda: _Closable())
+    st = autoload.status()
+    assert len(calls) == 1 and st["failed"] == 5 and not st["running"]
+    assert all(f["reason"] == "Alpaca refused the request" for f in st["failures"])
+
+
+def test_setup_failure_never_leaves_the_job_running(monkeypatch):
+    def broken():
+        raise OSError("bad certificate file")
+
+    monkeypatch.setattr(autoload, "http_client", broken)
+    autoload._state.update(running=True, done=0, failed=0, failures=[])
+    autoload._run([{"trade_id": 1, "ticker": "AAA", "date": "2026-09-01", "windows": []}], "sip", lambda: _Closable())
+    st = autoload.status()
+    assert not st["running"] and st["failures"][-1]["reason"] == "bad certificate file"
+
+
+class _Closable:
+    def close(self):
+        pass

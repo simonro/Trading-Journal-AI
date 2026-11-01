@@ -46,7 +46,19 @@ export default function LoadMissing({ accountId, count = 0, onFinished }) {
       if (data.running) timer.current = setTimeout(poll, POLL_MS);
       else await finished.current?.();
     } catch (e) {
-      if (e.response?.status === 409) return poll();
+      if (e.response?.status === 409) {
+        // A job is already running: follow it only if it is this account's.
+        try {
+          const { data } = await exitlabApi.loadMissingStatus();
+          if (!alive.current) return;
+          if (String(data.account_id) === String(accountId)) return poll();
+          setWatched(false);
+          setError('Prices for another account are loading. Try again when that finishes.');
+        } catch (err) {
+          if (alive.current) setError(errorText(err));
+        }
+        return;
+      }
       if (alive.current) setError(errorText(e));
     }
   }

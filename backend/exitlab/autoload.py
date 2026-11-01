@@ -60,15 +60,26 @@ def _update(**changes):
 
 
 def _run(items, feed, opener):
-    conn = opener()
-    client = http_client()
+    conn = client = None
+    # A window that failed once fails for every trade that needs it (SPY's are shared), so it
+    # is asked for once per job, not once per trade.
+    failed_windows = {}
     try:
+        conn = opener()
+        client = http_client()
         for item in items:
             try:
-                for symbol, start, end in item["windows"]:
-                    result = fetch(conn, symbol, start, end, feed, client=client)
-                    if result["feed"] != feed:
-                        raise ValueError(f"{feed.upper()} prices are unavailable for {symbol}; nothing was saved for this trade's comparison")
+                for window in item["windows"]:
+                    if window in failed_windows:
+                        raise ValueError(failed_windows[window])
+                    symbol, start, end = window
+                    try:
+                        result = fetch(conn, symbol, start, end, feed, client=client)
+                        if result["feed"] != feed:
+                            raise ValueError(f"{feed.upper()} prices are unavailable for {symbol}; nothing was saved for this trade's comparison")
+                    except Exception as exc:
+                        failed_windows[window] = str(exc) or exc.__class__.__name__
+                        raise
             except Exception as exc:  # One trade's failure never stops the rest.
                 with _lock:
                     _state["failed"] += 1
@@ -77,9 +88,16 @@ def _run(items, feed, opener):
             finally:
                 with _lock:
                     _state["done"] += 1
+    except Exception as exc:  # setup failed (database or HTTP client): report it, never stay "running"
+        with _lock:
+            _state["failures"].append({"ticker": "All trades", "date": "not started", "reason": str(exc) or exc.__class__.__name__})
     finally:
-        client.close()
-        conn.close()
+        for closer in (client, conn):
+            try:
+                if closer is not None:
+                    closer.close()
+            except Exception:
+                pass
         _update(running=False, finished_at=iso(datetime.now(UTC)))
 
 
