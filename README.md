@@ -78,6 +78,35 @@ and `set PORT=3020` plus `set REACT_APP_API_URL=http://localhost:8020` in termin
 The [Exit Lab guide](docs/README.md) and the [engine notes](backend/exitlab/README.md)
 cover eligibility, fill order and the API.
 
+## Leak Finder
+
+Reports > Leaks ranks the groups of your trades that cost you money, using only what you knew
+when you entered, so every leak is something you could have skipped. It describes your history;
+it does not predict future results.
+
+- **A leak** is a group of at least 20 trades sharing one thing known at entry (entry window, trade
+  number of the day, losses just before, minutes since the last loss, how the day stood, size against
+  your usual for that ticker, instrument, side, weekday, playbook setup, and the diary fields:
+  strategy, source, mistake tag, emotion) whose net is below zero. Sequence features only count
+  trades that had closed before this one was entered.
+- **Up to three leaks**, picked greedily: worst first, its trades removed, the rest recomputed. The
+  headline total never counts a trade twice, and sits beside your net without the leaks.
+- **Confidence** is a Welch t against the rest of the same dimension: 2+ solid, 1-2 likely, under 1
+  could be noise.
+- **New in the last 30 days**: groups of 10+ trades losing over the last 30 days of the range but not
+  over the whole range. **What is working**: the two groups that beat the rest by the most, one per
+  dimension.
+- **Trade management and costs.** Hold time and scaling out are outcomes, so they are shown beside
+  the leaks and never ranked as one. Commissions and fees are broken down by instrument.
+- **Show N trades** lists the trades behind a finding; a row opens the trade and Back returns to Leaks.
+
+The rules are plain code in `backend/leaks.py` (pure functions, tested in
+`backend/tests/test_leaks.py`), and `/api/leaks` loads the same trades as `/api/reports` (net P&L not
+zero, same account and date filters), so the two reconcile. With an Anthropic key,
+`/api/leaks/explain` asks Claude for one sentence per finding from the numbers only, cached in the
+`leak_explanations` table under a hash of those numbers, so it reruns only when they change. Without
+a key the tab keeps its plain template sentences.
+
 ## Privacy and your data
 
 Trading Journal AI is designed as a **local-first application**.
@@ -100,6 +129,8 @@ Some features use third-party APIs and are completely optional.
 **Claude / Anthropic**
 
 When you use AI analysis or the Brain assistant, the information required to answer your request may be sent to Anthropic's API. This can include trade information, journal context, or images you explicitly ask the AI to analyze.
+
+With a key set, opening Reports > Leaks sends each finding's group name and totals (trade count, net, per-trade average, win rate) to write its one-sentence explanation. Individual trades and trade ids are not sent.
 
 The core journal, trade reconstruction, P&L calculations, reports, and statistics do not require Claude.
 
@@ -139,7 +170,8 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
 - **Reports**: breakdowns by day of week, time of day, hold time, setup, grade, symbol, side, emotion,
   plus a Sources & Tags tab that scores where your ideas come from. One switch flips the whole page
   between bars and full numeric tables, and rows under ten trades are marked thin so a one-trade
-  strategy at 100% cannot sit at the top
+  strategy at 100% cannot sit at the top. A Leaks tab ranks what costs you money
+  (see [Leak Finder](#leak-finder))
 - **Diary**: upload handwritten notes, screenshots, or typed text; Claude extracts strategy, stops, R-multiples, emotional state, and mistakes, and matches them to your actual trades
 - **Day Review**: the session drawn as one picture, running P&L from the open to the close with every
   trade marked where you entered it, plus an AI coaching report graded on process rather than P&L.

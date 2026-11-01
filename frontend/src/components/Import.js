@@ -231,7 +231,7 @@ export default function Import({ accounts, accountId }) {
         <section className="card">
           <h2 className="section-title" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <FileText size={18} color="var(--accent-line)" aria-hidden="true" />
-            Import Broker CSV
+            Upload CSV File
           </h2>
 
           <DropZone
