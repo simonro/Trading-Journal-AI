@@ -26,3 +26,6 @@ backend/uploads/
 
 # windows shortcuts
 *.lnk
+
+# once-a-day release check cache
+backend/update_check.json

@@ -123,3 +123,8 @@ export const weeklySummaryApi = {
 export const yearlyKpisApi = {
   get: (params) => api.get('/api/yearly-kpis', { params }),
 };
+
+// Newer release on GitHub? Answered by the backend's once-a-day startup check.
+export const updateApi = {
+  get: () => api.get('/api/update'),
+};

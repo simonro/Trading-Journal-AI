@@ -108,6 +108,15 @@ The core journal, trade reconstruction, P&L calculations, reports, and statistic
 If you add Alpaca keys, the trade chart and Exit Lab's **Load prices** ask Alpaca for price bars:
 the ticker (plus SPY for Exit Lab) and the date range, nothing about your trades or account.
 
+**Update check (GitHub)**
+
+When the backend starts, it asks GitHub's public releases page whether a newer version exists, at
+most once a day (the answer is cached in `backend/update_check.json`). That is one anonymous request
+to `api.github.com`: GitHub sees your IP address and the app version, nothing about your trades,
+keys or settings. If a newer release exists you get a notice in the app and a line in the backend
+window; nothing is ever downloaded or installed for you. Offline, it stays silent. Turn it off with
+`UPDATE_CHECK=0` in `backend/.env`.
+
 ### API keys
 
 API keys are configured locally and should never be committed to GitHub.
@@ -227,6 +236,10 @@ then import your broker's statement on the Import page.
 
 ## Updating to a new release
 
+When a newer release is out, the app shows a notice at the top of the page with a link to the
+release notes (how the check works is under [Privacy](#privacy-and-your-data)). It never updates itself;
+you choose when, with the steps below.
+
 Your trades live in `backend/trading_journal.db` and your keys in `backend/.env`. Neither is part of
 a release, so an update never touches them. New tables are created on the first start and nothing
 existing is rewritten.
@@ -306,6 +319,7 @@ Everything is optional; the app runs without any keys and tells you exactly whic
 | `ALPACA_ENV_FILE` | Optional. Path to another `.env` file that holds the Alpaca keys for Exit Lab. When set, Exit Lab reads its keys only from that file. |
 | `ALPACA_DATA_FEED` | Optional, defaults to `iex` (free-tier data). Set to `sip` only if your key has a paid market-data subscription. |
 | `FRONTEND_ORIGINS` | Optional. Any `localhost`/`127.0.0.1` port is already accepted; add comma-separated origins here only for a frontend served from another host. |
+| `UPDATE_CHECK` | Optional. `0` turns off the once-a-day check for a newer release on GitHub. |
 
 ## Make it yours with Claude Code
 

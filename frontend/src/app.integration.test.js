@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, updateApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -83,6 +83,7 @@ jest.mock('./api', () => {
     edgeReportApi: withDefault({}),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
+    updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false })) }),
     libraryApi: withDefault({
       list: fn(() => ok(LIBRARY)),
       merge: fn(() => ok({ moved: 2, target: 'VWAP Cross', trades: 12 })),
@@ -358,4 +359,27 @@ test('Goals save failure is shown and keeps the panel open', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(/Could not save goals: Server error/);
   expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
+});
+
+test('a newer release shows a dismissible update notice with the update steps', async () => {
+  localStorage.clear();
+  updateApi.get.mockImplementation(() => Promise.resolve({ data: {
+    current: '1.5.0', latest: '1.6.0', available: true,
+    url: 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0',
+  } }));
+  render(<App />);
+  const notice = (await screen.findByText('Version 1.6.0 is available')).closest('[role="status"]');
+  expect(notice).toHaveTextContent('(you have 1.5.0)');
+  expect(within(notice).getByRole('link', { name: 'Release notes' }))
+    .toHaveAttribute('href', 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0');
+  expect(within(notice).getByText('setup.bat')).toBeInTheDocument();
+  fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss update notice' }));
+  expect(screen.queryByText(/Version 1.6.0 is available/)).not.toBeInTheDocument();
+  expect(localStorage.getItem('update-banner-dismissed')).toBe('1.6.0');
+});
+
+test('no update notice when the installed version is current', async () => {
+  render(<App />);
+  await waitFor(() => expect(updateApi.get).toHaveBeenCalled());
+  expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
 });

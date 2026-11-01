@@ -1002,3 +1002,19 @@ button.month-card:active { transform: translateY(1px); }
     scroll-behavior: auto !important;
   }
 }
+
+/* Update notice (components/UpdateBanner.js) */
+.update-banner {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  color: var(--text-primary); font-size: 12.5px; line-height: 1.5;
+  border-left: 2px solid var(--accent-line); background: var(--accent-soft);
+  padding: 8px 12px; margin-bottom: 12px;
+}
+.update-banner a { color: var(--accent-line); }
+.update-banner code { font-family: var(--font-mono); font-size: 11.5px; }
+.update-banner-steps { color: var(--text-secondary); }
+.update-banner-close {
+  background: none; border: 0; color: var(--text-secondary); font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 0 2px;
+}
+.update-banner-close:hover { color: var(--text-primary); }

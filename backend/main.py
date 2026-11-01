@@ -30,6 +30,7 @@ from ai_analysis import (
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from exitlab.api import router as exitlab_router
+import update_check
 
 load_dotenv()
 
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     finally:
         _conn.close()
     Path(UPLOAD_DIR).mkdir(exist_ok=True)
+    update_check.start_background_check()
     yield
 
 
@@ -72,6 +74,12 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
 app.include_router(exitlab_router)
+
+
+@app.get("/api/update")
+def get_update_status():
+    """Newer release on GitHub? Answered from the once-a-day startup check, never fetched here."""
+    return update_check.status()
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
