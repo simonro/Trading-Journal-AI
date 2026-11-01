@@ -54,15 +54,35 @@ def test_asks_github_at_most_once_a_day(tmp_path):
     assert len(calls) == 2
 
 
-def test_offline_is_silent_and_retries_next_start(tmp_path):
+def test_offline_is_silent_and_retries_after_an_hour(tmp_path):
     cache = tmp_path / "update_check.json"
+    calls = []
 
     def offline():
+        calls.append(1)
         raise OSError("no network")
 
     r = update_check.check(now=NOW, cache=cache, fetch=offline, current="1.5.0")
     assert r["available"] is False and r["latest"] is None
-    assert not cache.exists()
+    update_check.check(now=NOW + 60, cache=cache, fetch=offline, current="1.5.0")
+    assert len(calls) == 1, "a restart within the hour must not ask GitHub again"
+    update_check.check(now=NOW + update_check.RETRY_AFTER_FAIL + 1, cache=cache, fetch=offline, current="1.5.0")
+    assert len(calls) == 2
+
+
+def test_a_failed_check_keeps_the_last_answer(tmp_path):
+    cache = tmp_path / "update_check.json"
+    update_check.check(now=NOW, cache=cache, fetch=release("v1.6.0"), current="1.5.0")
+    r = update_check.check(now=NOW + update_check.DAY + 1, cache=cache, fetch=lambda: None, current="1.5.0")
+    assert r["available"] and r["latest"] == "1.6.0"
+
+
+def test_status_says_when_the_check_has_not_finished(monkeypatch):
+    monkeypatch.setattr(update_check, "_state", None)
+    assert update_check.status()["checked"] is False
+    monkeypatch.setattr(update_check, "_state", {"current": "1.5.1", "latest": "1.5.1", "available": False,
+                                                 "url": update_check.RELEASES_PAGE})
+    assert update_check.status()["checked"] is True
 
 
 def test_opt_out_never_fetches(tmp_path, monkeypatch):

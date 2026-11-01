@@ -86,9 +86,10 @@ it does not predict future results.
 
 - **A leak** is a group of at least 20 trades sharing one thing known at entry (entry window, trade
   number of the day, losses just before, minutes since the last loss, how the day stood, size against
-  your usual for that ticker, instrument, side, weekday, playbook setup, and the diary fields:
-  strategy, source, mistake tag, emotion) whose net is below zero. Sequence features only count
-  trades that had closed before this one was entered.
+  your usual for that account and ticker, instrument, side, weekday, playbook setup, and the diary
+  fields: strategy, source, emotion) whose net is below zero. Size is the first entry only, so a
+  later add does not count. Sequence features count every entry of the day, breakeven and open
+  trades included, and only trades fully closed before this one was entered.
 - **Up to three leaks**, picked greedily: worst first, its trades removed, the rest recomputed. The
   headline total never counts a trade twice, and sits beside your net without the leaks.
 - **Confidence** is a Welch t against the rest of the same dimension: 2+ solid, 1-2 likely, under 1
@@ -96,8 +97,10 @@ it does not predict future results.
 - **New in the last 30 days**: groups of 10+ trades losing over the last 30 days of the range but not
   over the whole range. **What is working**: the two groups that beat the rest by the most, one per
   dimension.
-- **Trade management and costs.** Hold time and scaling out are outcomes, so they are shown beside
-  the leaks and never ranked as one. Commissions and fees are broken down by instrument.
+- **Trade management and costs.** Hold time, scaling out and mistake tags (logged after the trade,
+  mostly about what happened in it) are shown beside the leaks and never ranked as one. Hold time
+  runs from the first entry to the last exit across days. Commissions and fees are broken down by
+  instrument.
 - **Show N trades** lists the trades behind a finding; a row opens the trade and Back returns to Leaks.
 
 The rules are plain code in `backend/leaks.py` (pure functions, tested in
@@ -286,11 +289,12 @@ launch.bat
 ```
 
 **If you downloaded the ZIP:** unzip the new version into a new folder, then copy your two files
-across before starting it:
+across before starting it, plus the `uploads` folder if you have uploaded diary images:
 
 ```bash
 copy old-folder\backend\.env               new-folder\backend\.env
 copy old-folder\backend\trading_journal.db new-folder\backend\trading_journal.db
+xcopy /e /i old-folder\backend\uploads     new-folder\backend\uploads
 ```
 
 Then run `npm install` in `frontend/` once and start it with `launch.bat`.

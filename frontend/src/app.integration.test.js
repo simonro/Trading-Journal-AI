@@ -100,7 +100,7 @@ jest.mock('./api', () => {
     }),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
-    updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false })) }),
+    updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false, checked: true })) }),
     libraryApi: withDefault({
       list: fn(() => ok(LIBRARY)),
       merge: fn(() => ok({ moved: 2, target: 'VWAP Cross', trades: 12 })),
@@ -417,6 +417,7 @@ test('a newer release shows a dismissible update notice with the update steps', 
   expect(within(notice).getByRole('link', { name: 'Release notes' }))
     .toHaveAttribute('href', 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0');
   expect(within(notice).getByText('setup.bat')).toBeInTheDocument();
+  expect(within(notice).getByText('backend/uploads')).toBeInTheDocument();
   fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss update notice' }));
   expect(screen.queryByText(/Version 1.6.0 is available/)).not.toBeInTheDocument();
   expect(localStorage.getItem('update-banner-dismissed')).toBe('1.6.0');

@@ -28,6 +28,7 @@ RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
 CACHE = Path(__file__).resolve().parent / "update_check.json"
 DAY = 86400
+RETRY_AFTER_FAIL = 3600  # a failed check (offline, rate limited) is retried after an hour, not every start
 TIMEOUT = 3.0
 _TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+[0-9A-Za-z.\-]{0,20}$")
 
@@ -80,18 +81,25 @@ def check(now: float | None = None, cache: Path = CACHE, fetch=_fetch, current: 
         cached = json.loads(cache.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         cached = None
-    if isinstance(cached, dict) and 0 <= now - cached.get("checked", 0) < DAY:
+    if not isinstance(cached, dict):
+        cached = {}
+    if 0 <= now - cached.get("checked", 0) < DAY or 0 <= now - cached.get("failed", 0) < RETRY_AFTER_FAIL:
         latest = cached.get("latest")
     else:
         try:
             latest = fetch()
-        except Exception:  # offline, timeout, GitHub down: all fine, try again next start
+        except Exception:  # offline, timeout, GitHub down: all fine, try again in an hour
             latest = None
         if latest is not None:
-            try:
-                cache.write_text(json.dumps({"checked": now, "latest": latest}), encoding="utf-8")
-            except OSError:
-                pass
+            entry = {"checked": now, "latest": latest}
+        else:
+            # remember the failure so restarts do not keep asking; keep the last answer we had
+            latest = cached.get("latest")
+            entry = {"checked": cached.get("checked", 0), "latest": latest, "failed": now}
+        try:
+            cache.write_text(json.dumps(entry), encoding="utf-8")
+        except OSError:
+            pass
     if isinstance(latest, dict) and latest.get("tag"):
         result["latest"] = latest["tag"].lstrip("v")
         result["url"] = latest.get("url") or RELEASES_PAGE
@@ -104,11 +112,13 @@ _lock = threading.Lock()
 
 
 def status() -> dict:
-    """The last answer, for GET /api/update. Before the check has finished, nothing is available."""
+    """The last answer, for GET /api/update. checked is False until the start-up check has finished,
+    so the banner knows to ask again."""
     with _lock:
         if _state is not None:
-            return dict(_state)
-    return {"current": current_version(), "latest": None, "available": False, "url": RELEASES_PAGE}
+            return dict(_state, checked=True)
+    return {"current": current_version(), "latest": None, "available": False, "url": RELEASES_PAGE,
+            "checked": not enabled()}
 
 
 def _run() -> None:
@@ -121,7 +131,8 @@ def _run() -> None:
             f"\nA newer Trading Journal AI release is available: v{result['latest']} (you run v{result['current']}).\n"
             f"Release notes: {result['url']}\n"
             "To update: git pull, then run setup.bat. Downloaded the ZIP? Unzip the new version and copy\n"
-            "backend/.env and backend/trading_journal.db into it. Turn this check off with UPDATE_CHECK=0.\n",
+            "backend/.env, backend/trading_journal.db and the backend/uploads folder into it.\n"
+            "Turn this check off with UPDATE_CHECK=0.\n",
             flush=True,
         )
 
