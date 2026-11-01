@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = "claude-opus-5"
+MODEL = "claude-opus-5-5"
 
 DIARY_SYSTEM_PROMPT = """You are an expert trading coach analyzing a trader's handwritten or typed diary entry.
 
@@ -158,7 +158,7 @@ def response_text(response) -> str:
     """Concatenate the text blocks of a Messages API response.
 
     `response.content` is a list of blocks and the FIRST one is not necessarily
-    text. On Claude Opus 5 adaptive thinking is on by default, so content[0] is
+    text. On Claude Opus 5.5 adaptive thinking is on by default, so content[0] is
     typically a ThinkingBlock — indexing it raises
     "'ThinkingBlock' object has no attribute 'text'". Always select by .type.
     """
@@ -166,7 +166,7 @@ def response_text(response) -> str:
     return "".join(parts).strip()
 
 
-# The per-trade JSON grows with the number of diary lines, and on Opus 5 adaptive
+# The per-trade JSON grows with the number of diary lines, and on Opus 5.5 adaptive
 # thinking spends from the SAME max_tokens budget, so a tight cap truncates the
 # JSON mid-string and json.loads() reports a meaningless column number instead of
 # the real problem. Sized for a full day of trades plus thinking.
