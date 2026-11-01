@@ -16,7 +16,7 @@ your days on process.
 - **Thinkorswim and Interactive Brokers** importers, plus a template for any other broker.
 - **Free and MIT licensed.** No paid tier.
 
-**[Quick start](#quick-start)** · **[Watch the walkthrough](https://www.youtube.com/watch?v=LTR4HOfS_hc)** · **[Releases](https://github.com/simonro/Trading-Journal-AI/releases)** · **[Privacy](#privacy-and-your-data)**
+**[Quick start](#quick-start)** · **[Watch the walkthrough](https://www.youtube.com/watch?v=rsNizd9niG4)** · **[Releases](https://github.com/simonro/Trading-Journal-AI/releases)** · **[Privacy](#privacy-and-your-data)**
 
 **What this is not:** Not financial advice. Not a signal service. Every screenshot below is the
 synthetic demo seed, not anyone's real trades.
@@ -216,10 +216,11 @@ or delete one and reassign its trades.
 
 ## Watch the walkthrough
 
-[![Watch: I built my own AI trading journal and stopped paying monthly](docs/video-thumbnail.png)](https://www.youtube.com/watch?v=LTR4HOfS_hc)
+[![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/video-thumbnail.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
-A full tour of the app, an install from an empty folder, and three prompts that change it while
-the camera is running. Every prompt used in the video is in the video description, ready to paste.
+A tour of the current version: the Dashboard, Trade View, Day Review, Leaks and Exit Lab, on a
+demo account with synthetic trades. The install and update prompts for Claude Code or Codex are in
+the video description, ready to paste.
 
 ## Quick start
 
