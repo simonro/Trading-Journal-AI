@@ -206,7 +206,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 test('Import keeps broker CSV import and diary analysis, with keyboard dropzones', async () => {
   await renderApp();
   fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /^Import$/ }));
-  expect(await screen.findByRole('heading', { name: /Import Broker CSV/ })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: /Upload CSV File/ })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Analyze Trading Diary/ })).toBeInTheDocument();
   // Both supported brokers stay selectable, with auto-detect as the default.
   const broker = screen.getByLabelText('Broker');
