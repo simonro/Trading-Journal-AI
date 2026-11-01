@@ -54,6 +54,12 @@ export const importApi = {
   }),
 };
 
+// Leak Finder: the slices of your trading ranked by what they cost (backend/leaks.py).
+export const leaksApi = {
+  get: (params) => api.get('/api/leaks', { params }),
+  explain: (params) => api.get('/api/leaks/explain', { params }),
+};
+
 export const kpisApi = {
   get: (params) => api.get('/api/kpis', { params }),
 };

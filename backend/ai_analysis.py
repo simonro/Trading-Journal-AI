@@ -738,3 +738,52 @@ def generate_brain_response(messages: list[dict], context: str) -> str:
         messages=claude_messages,
     )
     return response_text(response)
+
+
+# ── Leak Finder sentences ───────────────────────────────────────────────────────
+
+LEAKS_PROMPT = """You explain a trader's own statistics in plain words. You get a JSON list of findings
+from their trading journal. Each finding is a group of their trades sharing one thing known at
+entry (entry time, trade number of the day, how the day stood, size, instrument, a diary tag...).
+
+kind "leak": the group lost money in total over the period.
+kind "edge": the group made more per trade than the rest.
+kind "new_leak_last_30_days": losing over the last 30 days, not over the whole period.
+
+For each finding write ONE sentence, at most 30 words, that says what the numbers show and why a
+trader would care. Rules:
+- Use only the numbers given. Never invent a figure, a cause or a market fact.
+- Dollar figures are whole dollars with a $ sign. Use "a trade" for averages.
+- If confidence is "noise", say the sample may be noise.
+- If diary_based is true, note it rests on the trades that have diary notes.
+- If overlap_trades > 0, you may say it overlaps an earlier finding.
+- No advice to buy or sell anything, no predictions, no exclamation marks.
+- Never use an em dash or en dash. Use commas or periods.
+
+Reply with JSON only: {"sentences": {"<id>": "<sentence>", ...}} covering every id."""
+
+LEAKS_MAX_TOKENS = 4000
+
+
+def explain_leaks(findings: list[dict]) -> dict:
+    """One sentence per finding id, written from the numbers only."""
+    if not findings:
+        return {}
+    client = get_client()
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=LEAKS_MAX_TOKENS,
+        system=LEAKS_PROMPT,
+        messages=[{"role": "user", "content": json.dumps(findings, indent=1)}],
+    )
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise ValueError(f"The leak explanations hit the {LEAKS_MAX_TOKENS}-token limit and were cut off.")
+    raw = response_text(response)
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+    sentences = json.loads(raw).get("sentences") or {}
+    ids = {f["id"] for f in findings}
+    # keep only ids we asked about, and strip any dash the model slipped in anyway
+    return {k: str(v).replace("\u2014", ",").replace("\u2013", "-").strip()
+            for k, v in sentences.items() if k in ids and v}

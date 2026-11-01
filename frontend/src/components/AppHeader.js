@@ -224,10 +224,10 @@ function AccountMenu({ accounts, selectedAccountId, onSelectAccount, onAccountCr
 
 export default function AppHeader({
   page, onNavigate, accounts, selectedAccountId, onSelectAccount,
-  onAddTrade, onAccountCreated, brainOpen, onToggleBrain,
+  onAddTrade, onAccountCreated, brainOpen, onToggleBrain, detailOrigin = 'trades',
 }) {
-  // Trade detail is reached from Trade View, so it keeps that tab highlighted.
-  const activeId = page === 'trade-detail' ? 'trades' : page;
+  // Trade detail keeps the page it was opened from highlighted (Trade View, Exit Lab or Reports).
+  const activeId = page === 'trade-detail' ? detailOrigin : page;
 
   return (
     <header className="app-header">

@@ -102,6 +102,39 @@ const METRICS = [
       },
     ],
   },
+  {
+    category: 'Leak Finder (Reports > Leaks)',
+    items: [
+      {
+        name: 'Leak',
+        formula: 'A group of 20+ trades sharing one thing known at entry whose net P&L is below zero',
+        description: 'Groups come from entry time, trade number of the day, losses just before, how long after a loss you got back in, how the day stood, size against your usual for that ticker, instrument, side, weekday, setup, and diary fields. Hold time is an outcome, so it is shown under Trade management instead.',
+        why: 'A leak is something you could have skipped when you entered, and its cost is what skipping it would have saved.',
+        target: null,
+      },
+      {
+        name: 'Leak total',
+        formula: 'Worst leak first, then its trades are removed and the rest recomputed, up to three leaks',
+        description: 'The headline adds each leak only for trades not already counted under an earlier one, so no trade is counted twice. "Without the leaks" is your net plus that total.',
+        why: 'Overlapping groups (futures traded midday, say) would otherwise inflate the number.',
+        target: null,
+      },
+      {
+        name: 'Confidence',
+        formula: 'Welch t of the group against the rest of the same dimension',
+        description: 'Solid pattern: about 2 or more. Likely pattern: 1 to 2. Could be noise: under 1.',
+        why: 'A losing group can be bad luck. The gap has to be large against its own spread before it is worth changing anything.',
+        target: null,
+      },
+      {
+        name: 'New in the last 30 days',
+        formula: 'A group of 10+ trades losing over the last 30 days of the range, not losing over the whole range',
+        description: 'Catches a habit that has started recently and would be hidden by a good earlier stretch.',
+        why: 'Answers "why am I losing lately" without digging through every trade.',
+        target: null,
+      },
+    ],
+  },
 ];
 
 const FEATURES = [
@@ -172,6 +205,16 @@ const FEATURES = [
     tips: [
       'Re-importing a file is safe - duplicates are detected by trade group and skipped.',
       'If you deleted a bad trade and need to re-import it, the re-import will restore it cleanly.',
+    ],
+  },
+  {
+    name: 'Leaks',
+    icon: '🔍',
+    description: 'A Reports tab that ranks the groups of your trades by what they cost: up to three leaks, anything new in the last 30 days, the two groups working best, trade management and costs. Claude writes one sentence per finding from the numbers only.',
+    tips: [
+      'It uses the page filters, so pick an account and a date range first.',
+      'Show N trades lists the trades behind a finding; a row opens the trade, and Back returns to Leaks.',
+      'The explanations are cached and only regenerate when the numbers change, after an import or a new range.',
     ],
   },
   {

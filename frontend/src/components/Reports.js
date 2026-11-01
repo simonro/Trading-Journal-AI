@@ -3,11 +3,12 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ReferenceLine, AreaChart, Area,
 } from 'recharts';
-import { reportsApi, edgeReportApi } from '../api';
+import { reportsApi, edgeReportApi, leaksApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import { RMultipleDist, EmotionTable, MistakeFreq, HoldTime } from './Edge';
 import { PageHeader, PanelHead } from './ui';
 import { Measures, Seg } from '../v3/parts';
+import Leaks from './Leaks';
 
 const fmt$ = (v) =>
   `${v < 0 ? '-' : ''}$${Math.abs(Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -21,6 +22,7 @@ export const THIN_SAMPLE = 10;
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'leaks', label: 'Leaks' },
   { id: 'setups', label: 'Setups & Strategy' },
   { id: 'sources-tags', label: 'Sources & Tags' },
   { id: 'timing', label: 'Timing' },
@@ -242,15 +244,17 @@ function DrawdownCurve({ curve }) {
   );
 }
 
-export default function Reports({ accountId }) {
+// `initial` restores the tab and range when Back from a trade returns here.
+export default function Reports({ accountId, onOpenDetail, initial }) {
   // one view mode for the whole page: you are either scanning or reading numbers
   const [view, setView] = useState('bars');
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState(initial?.tab || 'overview');
   const [data, setData] = useState(null);
   const [edge, setEdge] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [dateFrom, setDateFrom] = useState(initial?.dateFrom || '');
+  const [dateTo, setDateTo] = useState(initial?.dateTo || '');
+  const [leaks, setLeaks] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -267,6 +271,22 @@ export default function Reports({ accountId }) {
       setLoading(false);
     });
   }, [accountId, dateFrom, dateTo]);
+
+  // Leaks load only when their tab is open, and again whenever the filters change.
+  const leakParams = {};
+  if (accountId != null) leakParams.account_id = accountId;
+  if (dateFrom) leakParams.date_from = dateFrom;
+  if (dateTo) leakParams.date_to = dateTo;
+  useEffect(() => { setLeaks(null); }, [accountId, dateFrom, dateTo]);
+  useEffect(() => {
+    if (tab !== 'leaks' || leaks) return undefined;
+    let live = true;
+    leaksApi.get(leakParams)
+      .then(r => { if (live) setLeaks(r.data); })
+      .catch(() => { if (live) setLeaks({ has_data: false, failed: true }); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, leaks, accountId, dateFrom, dateTo]);
 
   const s = data?.summary;
   const gap = { display: 'flex', flexDirection: 'column', gap: 20 };
@@ -363,6 +383,33 @@ export default function Reports({ accountId }) {
                 <Breakdown view={view} rows={data.by_month} labelHead="Month" height={260} />
               </Section>
             </>
+          )}
+
+          {tab === 'leaks' && (
+            !leaks ? (
+              <div style={gap}>{[1, 2].map(i => <div key={i} className="skeleton" style={{ height: 180 }} />)}</div>
+            ) : leaks.failed ? (
+              <div className="notice neg" role="alert">The leaks could not be loaded. Check that the backend is running, then reopen this tab.</div>
+            ) : (
+              <Leaks
+                data={leaks}
+                params={leakParams}
+                onOpenDetail={(t, list) => onOpenDetail && onOpenDetail(t, list, 'Stats',
+                  { page: 'reports', state: { tab: 'leaks', dateFrom, dateTo } })}
+              >
+                <section className="lk-group">
+                  <div className="lk-group-head">
+                    <h2 className="v3-h">Trade management</h2>
+                    <p className="v3-h-sub">Outcomes, not entry decisions, so they are never ranked as a leak. Short holds include every stop that did its job; Exit Lab shows what other exits would have made.</p>
+                  </div>
+                  <Breakdown view={view} rows={leaks.management?.by_hold_time} labelHead="Hold" />
+                  <div className="lk-group-head">
+                    <h2 className="v3-h">Scaled out vs all-or-nothing</h2>
+                  </div>
+                  <Breakdown view={view} rows={leaks.management?.by_management} labelHead="Management" height={200} />
+                </section>
+              </Leaks>
+            )
           )}
 
           {tab === 'setups' && (
