@@ -24,6 +24,16 @@ synthetic demo seed, not anyone's real trades.
 
 ![The dashboard: net P&L over a live equity curve, every session as one strip, measures against your goals, and the month beside your recent trades](docs/screenshot-dashboard.png)
 
+## Watch the walkthrough
+
+[![Watch on YouTube](https://img.shields.io/badge/Watch%20on-YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
+
+[![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/video-thumbnail.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
+
+A tour of the current version: the Dashboard, Trade View, Day Review, Leaks and Exit Lab, on a
+demo account with synthetic trades. The install and update prompts for Claude Code or Codex are in
+the video description, ready to paste.
+
 ## Exit Lab
 
 Exit Lab replays your completed stock trades on historical one-minute prices and shows
@@ -229,16 +239,6 @@ execution, symbol, source, tag and psychology.
 or delete one and reassign its trades.
 
 ![Settings: the strategy, source and tag library with rename, merge and delete](docs/screenshot-settings.png)
-
-## Watch the walkthrough
-
-[![Watch on YouTube](https://img.shields.io/badge/Watch%20on-YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
-
-[![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/video-thumbnail.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
-
-A tour of the current version: the Dashboard, Trade View, Day Review, Leaks and Exit Lab, on a
-demo account with synthetic trades. The install and update prompts for Claude Code or Codex are in
-the video description, ready to paste.
 
 ## Quick start
 
