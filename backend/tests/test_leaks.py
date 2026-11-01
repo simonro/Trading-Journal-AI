@@ -210,6 +210,73 @@ def test_rest_label_names_the_comparison_group():
     assert leaks.REST_LABEL['reentry'] == 'other trades taken after a loss'
 
 
+# ── review findings, 2026-11-01 ────────────────────────────────────────────
+
+def test_size_uses_the_first_entry_not_later_adds():
+    rows = [trade(f'2026-09-{d:02d}', '10:00:00', '10:05:00', 1, qty=100) for d in range(1, 6)]
+    scaled = trade('2026-09-08', '10:00:00', '11:30:00', 1, qty=100)
+    ex = json.loads(scaled['executions'])
+    ex.insert(1, {'time': '11:00:00', 'action': 'BOT', 'qty': 200, 'price': 10.0})
+    ex[-1]['qty'] = 300
+    scaled['executions'] = json.dumps(ex)
+    leaks.derive(rows + [scaled])
+    assert leaks._size(scaled) == 'Your usual size'
+
+
+def test_usual_size_is_per_account():
+    big = [trade(f'2026-09-{d:02d}', '10:00:00', '10:05:00', 1, qty=10000, account=2) for d in range(1, 10)]
+    small = [trade(f'2026-09-{d:02d}', '11:00:00', '11:05:00', 1, qty=100, account=1) for d in range(1, 8)]
+    leaks.derive(big + small)
+    assert leaks._size(small[-1]) == 'Your usual size'
+
+
+def test_overnight_hold_uses_the_dates():
+    r = trade('2026-10-02', '15:00:00', '15:15:00', 10)
+    ex = json.loads(r['executions'])
+    ex[0]['date'], ex[1]['date'] = '2026-10-01', '2026-10-02'
+    r['executions'] = json.dumps(ex)
+    leaks.derive([r])
+    assert r['hold_min'] == 24 * 60 + 15 and leaks.hold_bucket(r) == '2+ hrs'
+
+
+def test_breakeven_and_open_trades_still_count_in_the_sequence():
+    be = trade('2026-10-05', '09:35:00', '09:40:00', 0)
+    loss = trade('2026-10-05', '09:45:00', '09:50:00', -50)
+    open_pos = trade('2026-10-05', '09:52:00', '09:53:00', 0)
+    open_pos['executions'] = json.dumps([{'time': '09:52:00', 'action': 'BOT', 'qty': 100, 'price': 10.0}])
+    after = trade('2026-10-05', '10:00:00', '10:05:00', 20)
+    leaks.derive([be, loss, open_pos, after])
+    assert loss['trade_no'] == 2 and after['trade_no'] == 4
+    assert after['loss_streak'] == 1 and after['day_run'] == -50
+
+
+def test_new_leak_needs_the_whole_range_to_be_flat_or_up():
+    # Everything inside 30 days: 10 losing shorts are below the whole-range minimum but still lose there.
+    rows = [trade(f'2026-09-{d:02d}', '10:00:00', '10:05:00', -100, side='SHORT') for d in range(1, 11)]
+    rows += [trade(f'2026-09-{d:02d}', '11:00:00', '11:05:00', 50) for d in range(1, 21)]
+    res = leaks.find_leaks(leaks.derive(rows))
+    assert 'side:SHORT' not in [f['id'] for f in res['new']]
+
+
+def test_findings_have_distinct_keys_for_their_sentences():
+    old = []
+    for d in range(1, 29):
+        date = f'2026-08-{d:02d}'
+        old.append(trade(date, '09:50:00', '09:55:00', 10))
+        old.append(trade(date, '12:00:00', '12:05:00', 40))
+    res = leaks.find_leaks(leaks.derive(old + _sessions(12, 10, -30, start=15)))
+    ids = [f['id'] for f in leaks.explain_payload(res)]
+    assert len(ids) == len(set(ids))
+    assert all(f['key'].startswith('new|') for f in res['new'])
+
+
+def test_mistake_tags_are_shown_beside_never_ranked():
+    assert 'mistake' not in [d[0] for d in leaks.DIMENSIONS]
+    r = trade('2026-10-06', '10:00:00', '10:05:00', -10)
+    r['tags'] = [('mistake', 'Moved stop'), ('mistake', 'Chased'), ('emotion', 'calm')]
+    assert sorted(x['mistake_tag'] for x in leaks.mistake_rows([r])) == ['Chased', 'Moved stop']
+
+
 # ── API: /api/leaks and the cached explanations ────────────────────────────
 
 @pytest.fixture
@@ -243,6 +310,7 @@ def test_api_returns_leaks_management_and_costs(client):
     assert body['has_data'] and body['trade_count'] == 50
     assert body['leaks'][0]['id'] == 'entry_window:11:00-13:30'
     assert body['management']['by_hold_time'] and body['costs'][0]['instrument'] == 'STOCK'
+    assert body['management']['by_mistake'] == []
     assert c.get('/api/leaks', params={'account_id': 99}).json() == {'has_data': False}
 
 

@@ -142,6 +142,33 @@ def fetch_bars(body: BarsRequest, conn=Depends(connection)):
     return result
 
 
+class LoadMissingRequest(StrictModel):
+    account_id: int = Field(gt=0)
+
+
+def _open_db():
+    from database import get_db
+    return get_db()
+
+
+@router.post("/bars/load-missing", status_code=202)
+def load_missing(body: LoadMissingRequest, conn=Depends(connection)):
+    from . import autoload
+    try:
+        started = autoload.start(conn, body.account_id, _open_db)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if started is None:
+        raise HTTPException(409, "Prices are already loading. Wait for that job to finish")
+    return started
+
+
+@router.get("/bars/load-missing/status")
+def load_missing_status():
+    from . import autoload
+    return autoload.status()
+
+
 @router.post("/trades/{trade_id}/stops", status_code=201)
 def stop(trade_id: int, body: StopRequest, conn=Depends(connection)):
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()

@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, reportsApi, leaksApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, reportsApi, leaksApi, updateApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -100,6 +100,7 @@ jest.mock('./api', () => {
     }),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
+    updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false, checked: true })) }),
     libraryApi: withDefault({
       list: fn(() => ok(LIBRARY)),
       merge: fn(() => ok({ moved: 2, target: 'VWAP Cross', trades: 12 })),
@@ -402,4 +403,28 @@ test('Reports > Leaks ranks a leak, shows the Claude sentence, and Back from a t
   fireEvent.click(screen.getByRole('button', { name: /Back to Leaks/ }));
   expect(await screen.findByRole('tab', { name: 'Leaks' })).toHaveAttribute('aria-selected', 'true');
   expect(await screen.findByText('Midday entries cost you $750.')).toBeInTheDocument();
+});
+
+test('a newer release shows a dismissible update notice with the update steps', async () => {
+  localStorage.clear();
+  updateApi.get.mockImplementation(() => Promise.resolve({ data: {
+    current: '1.5.0', latest: '1.6.0', available: true,
+    url: 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0',
+  } }));
+  render(<App />);
+  const notice = (await screen.findByText('Version 1.6.0 is available')).closest('[role="status"]');
+  expect(notice).toHaveTextContent('(you have 1.5.0)');
+  expect(within(notice).getByRole('link', { name: 'Release notes' }))
+    .toHaveAttribute('href', 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0');
+  expect(within(notice).getByText('setup.bat')).toBeInTheDocument();
+  expect(within(notice).getByText('backend/uploads')).toBeInTheDocument();
+  fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss update notice' }));
+  expect(screen.queryByText(/Version 1.6.0 is available/)).not.toBeInTheDocument();
+  expect(localStorage.getItem('update-banner-dismissed')).toBe('1.6.0');
+});
+
+test('no update notice when the installed version is current', async () => {
+  render(<App />);
+  await waitFor(() => expect(updateApi.get).toHaveBeenCalled());
+  expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
 });

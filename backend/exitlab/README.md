@@ -2,7 +2,8 @@
 
 Engine: `exitlab-stop-first-v1`. All views describe the account's full historical trade
 record. The package uses cached minute prices and places no orders. Price fetching is
-an explicit REST action; calculations never fetch prices automatically.
+a REST action started by the page (Load missing prices, or opening a trade's Exits tab);
+the calculations themselves never fetch prices.
 
 ## User views
 
@@ -123,6 +124,10 @@ Routes under `/api/exitlab`:
 - POST `/history` with `account_id`; GET `/trades/{id}/simple` for replay.
 - POST `/trades/{id}/stops` with `price`, writing the journal stop loss.
 - POST `/bars/fetch`; POST `/excursions/recompute` with account and feed.
+- POST `/bars/load-missing` with `account_id` starts one background job (409 while one
+  runs); GET `/bars/load-missing/status` returns `running`, `total`, `done` (processed,
+  failed included), `failed`, `failures` (`ticker`, `date`, `reason`), `started_at`,
+  `finished_at`. `readiness` and account `history` report the same count as `missing_prices`.
 - GET/PUT `/settings` remain zero-cost compatibility stubs without storage access.
 
 Removed routes return 404: `/comparisons`, `/trades/{id}/replay`, `/holdout/promote`,
@@ -133,7 +138,18 @@ Historical Alpaca REST uses raw 1Min bars with feed-specific pagination and expl
 IEX fallback only for SIP 403. Credentials are read through `ALPACA_ENV_FILE` or
 supported environment names, never logged or copied. Reads never spend a price budget.
 Load prices requests both stock and SPY, including previous-session regular windows.
-Sparse fetched windows are tracked, while explicit retry refreshes gaps.
+Sparse fetched windows are tracked, while explicit retry refreshes gaps. A window that
+runs into the last 15 minutes is clipped to bars older than 15 minutes instead of refused;
+it is recorded as fetched only up to the clipped end, so a later request fetches the rest.
+
+Load missing prices (`autoload.py`) plans from the replay's own windows (`regular_windows`)
+and the cache's own completeness test (`bars.covered`, also used by `fetch`). It takes stock
+trades with a stop whose only exclusion is missing prices (eligible trades count too when
+SPY or the warm-up session is missing), skips sessions that closed under 15 minutes ago,
+and fetches exactly the missing stock and SPY windows through `fetch`, sharing its
+one-request-per-second budget. A fetched but sparse window is not requested again; the
+per-trade Load prices link refreshes it. The Exits tab loads a trade's missing prices once
+when it opens (cache first, no refresh), then replays again; Load prices is the retry.
 
 ## Demo and local verification
 

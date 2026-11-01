@@ -15,8 +15,10 @@ Advanced contains the rule builder and saved rules with Show in tables and Appli
 to setups. Supported exits include R targets, breakeven/R-step and ATR trailing,
 scale-outs, timed exits, VWAP touch/close, EMA close/cross and 5-minute RS/RW.
 Scaled entries use average cost and begin replay at the last entry execution.
-Missing required regular-hours prices remain an explicit exclusion; Load prices
-requests stock and benchmark data, including the previous session when needed.
+Missing required regular-hours prices remain an explicit exclusion. Load missing prices
+fetches them for every such trade in one background job; Load prices requests one trade's
+stock and benchmark data, including the previous session when needed. The Exits tab loads
+a trade's missing prices once when it opens.
 
 The demo is labeled **Synthetic trades, historical market prices**. It is separate
 from the real journal and places no orders.

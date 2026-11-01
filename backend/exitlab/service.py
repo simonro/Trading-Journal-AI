@@ -36,7 +36,9 @@ def readiness(conn, account_id, feed):
                      "source": t.source if t else e["journal_trade"].get("source"),
                      "stop_price": t.stop if t else None, "journal_trade": e["journal_trade"],
                      "scaled_entry": scaling_details(t, e["bars"]) if t else None})
+    from .autoload import plan
     return {"feed": feed, "eligible": sum(r["eligible"] for r in rows),
+            "missing_prices": len(plan(conn, account_id, feed, entries=entries)),
             "excluded": sum(not r["eligible"] for r in rows),
             "missing_stops": sum(r["stop_price"] is None for r in rows),
             "trades": rows, "note": "Rule-specific warm-up is checked during replay"}

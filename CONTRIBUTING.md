@@ -96,6 +96,17 @@ you use to download it. Until then, the generic template on the Import page work
   and nothing a user already has is rewritten or dropped.
 - Never include `.env` files, API keys, databases or broker statements.
 
+## Releases and the version number
+
+The `VERSION` file at the repo root is the single source of truth for the app version. The backend
+reads it, sends it as the User-Agent of the once-a-day update check, and compares it with the latest
+GitHub release to decide whether to show the update notice.
+
+To cut a release: bump `VERSION` (for example `1.5.0` to `1.6.0`) in the pull request that finishes
+the release, merge it, then tag that commit `v` plus the same number (`v1.6.0`) and publish the GitHub
+release from the tag. If the tag and `VERSION` disagree, users on the new release are told to update
+to the version they already have, or never hear about it.
+
 ## Code style
 
 Match the code around you. Python follows the style of `backend/`; React components follow

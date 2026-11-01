@@ -4,6 +4,8 @@ from datetime import datetime
 from .models import Trade, NY, UTC, MINUTE, continuous
 from .calendar import trade_session
 
+MISSING_PRICES = "incomplete_minute_coverage_through_close"
+
 
 def from_row(row, stop=None):
     row = dict(row)
@@ -69,7 +71,7 @@ def reasons(trade, bars, simulation=False, tick=0.01):
         errors.append("not_completed_same_regular_session")
     first = trade.entered_at.replace(second=0, microsecond=0)
     if not continuous(bars, first, closing):
-        errors.append("incomplete_minute_coverage_through_close")
+        errors.append(MISSING_PRICES)
     if len({b.feed for b in bars}) > 1:
         errors.append("mixed_feeds")
     by_time = {b.ts: b for b in bars}

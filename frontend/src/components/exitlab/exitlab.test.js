@@ -6,7 +6,7 @@ import { SIMPLE_NAMES, summary, exclusionLine, resultText } from './simple';
 import { excursionText } from '../../utils/excursions';
 import { exitlabApi } from '../../api';
 
-jest.mock('../../api', () => ({ exitlabApi: { history: jest.fn(), simpleReplay: jest.fn(), rules: jest.fn(), saveRule: jest.fn(), stop: jest.fn(), fetchBars: jest.fn(), saveSettings: jest.fn() } }));
+jest.mock('../../api', () => ({ exitlabApi: { history: jest.fn(), simpleReplay: jest.fn(), rules: jest.fn(), saveRule: jest.fn(), stop: jest.fn(), fetchBars: jest.fn(), saveSettings: jest.fn(), loadMissing: jest.fn(), loadMissingStatus: jest.fn() } }));
 jest.mock('./ReplayChart', () => () => <div>Historical chart</div>);
 const trade = { id: 1, account_id: 1, ticker: 'FIXTURE', side: 'LONG', source: 'demo', date: '2026-10-01', setup: 'Breakout', net_pnl: 47.5 };
 const ruleList = SIMPLE_NAMES.slice(1).map((name, i) => ({ id: i + 1, name, is_preset: 1, hash: String(i) }));
@@ -114,18 +114,18 @@ test('Advanced has no journal cost controls or sensitivity even for legacy resul
   expect(screen.getByText(/Rule simulations always use zero modeled costs and zero slippage/)).toBeInTheDocument();
 });
 
-test('Exits names the missing SPY minute and loads both symbols with prior-session warm-up', async () => {
+test('Exits loads a missing SPY minute on open, both symbols with prior-session warm-up', async () => {
   const gap = 'regular_minute_missing|SPY|2026-10-01T10:37:00-04:00';
   exitlabApi.simpleReplay.mockResolvedValueOnce({ data: { ...replay,
     rules: [{ rule: { name: 'RS/RW' }, rule_hash: 'rs', trades: [{ trade_id: 1, eligible: false, reasons: [gap] }] }] } });
   exitlabApi.fetchBars.mockResolvedValue({ data: { feed: 'sip', benchmark: { feed: 'sip' }, warmup: { feed: 'sip' }, warmup_benchmark: { feed: 'sip' } } });
   render(<TradeExits trade={trade} />);
-  expect(await screen.findByText(/SPY 10:37 missing/)).toBeVisible();
-  expect(exitlabApi.fetchBars).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Load prices' }));
   await waitFor(() => expect(exitlabApi.fetchBars).toHaveBeenCalledWith({
-    symbol: 'FIXTURE', start: '2026-10-01T08:00:00Z', end: '2026-10-01T21:00:00Z', feed: 'sip', include_warmup: true, refresh: true }));
+    symbol: 'FIXTURE', start: '2026-10-01T08:00:00Z', end: '2026-10-01T21:00:00Z', feed: 'sip', include_warmup: true, refresh: false }));
   await waitFor(() => expect(exitlabApi.simpleReplay).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText('+0.50R actual')).toBeVisible();
+  expect(screen.queryByText(/SPY 10:37 missing/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Load prices' })).not.toBeInTheDocument();
 });
 
 test('history rule exclusion offers Load prices without opening Advanced', async () => {
@@ -146,9 +146,9 @@ test('failed previous-session fetch remains visible and can be retried', async (
   exitlabApi.simpleReplay.mockResolvedValue({ data: { ...replay, reasons: ['regular_minute_missing|SPY|2026-09-30T15:25:00-04:00'] } });
   exitlabApi.fetchBars.mockRejectedValueOnce({ response: { data: { detail: 'Previous session unavailable' } } });
   render(<TradeExits trade={trade} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Load prices' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Previous session unavailable');
   expect(screen.getByRole('button', { name: 'Load prices' })).toBeEnabled();
+  expect(exitlabApi.fetchBars).toHaveBeenCalledTimes(1);
 });
 
 test('failed history request can retry; account choice remains explicit', async () => {

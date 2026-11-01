@@ -16,6 +16,7 @@ import Help from './components/Help';
 import Settings from './components/Settings';
 import ExitLab from './components/ExitLab';
 import { DemoLabel } from './components/exitlab/shared';
+import UpdateBanner from './components/UpdateBanner';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
@@ -100,6 +101,7 @@ export default function App() {
       />
 
       <main className="app-main" id="main">
+        <UpdateBanner />
         {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountId == null || a.id === selectedAccountId))} />}
         {page === 'dashboard' && (
           <Dashboard

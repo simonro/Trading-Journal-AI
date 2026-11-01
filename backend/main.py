@@ -33,6 +33,7 @@ import leaks
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from exitlab.api import router as exitlab_router
+import update_check
 
 load_dotenv()
 
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     finally:
         _conn.close()
     Path(UPLOAD_DIR).mkdir(exist_ok=True)
+    update_check.start_background_check()
     yield
 
 
@@ -75,6 +77,12 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
 app.include_router(exitlab_router)
+
+
+@app.get("/api/update")
+def get_update_status():
+    """Newer release on GitHub? Answered from the once-a-day startup check, never fetched here."""
+    return update_check.status()
 
 
 # ── Dependency ─────────────────────────────────────────────────────────────────
@@ -1666,15 +1674,9 @@ def get_reports(
             ex = json.loads(r['executions'] or '[]')
         except Exception:
             ex = []
-        ea = 'BOT' if r['side'] == 'LONG' else 'SOLD'
-        xa = 'SOLD' if r['side'] == 'LONG' else 'BOT'
-        ent = sorted([e for e in ex if e.get('action') == ea], key=lambda e: e.get('time', ''))
-        xit = sorted([e for e in ex if e.get('action') == xa], key=lambda e: e.get('time', ''))
-        t_in = _mins_of(ent[0].get('time')) if ent else None
-        t_out = _mins_of(xit[-1].get('time')) if xit else None
-        r['entry_min'] = t_in
-        r['hold_min'] = (t_out - t_in) if (t_in is not None and t_out is not None) else None
-        r['n_exits'] = len({e.get('time') for e in xit}) if xit else 0
+        # same timing rules as Leak Finder, so the hold-time tables reconcile (overnight holds included)
+        tt = leaks.trade_times(ex, r['side'], r['date'])
+        r['entry_min'], r['hold_min'], r['n_exits'] = tt['entry_min'], tt['hold_min'], tt['n_exits']
         try:
             r['dow'] = _dt.strptime(r['date'], '%Y-%m-%d').weekday()
         except Exception:
@@ -1823,7 +1825,7 @@ def _leak_rows(conn, account_id, date_from, date_to):
                ta.strategy, ta.emotional_state, ta.idea_source
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
+        WHERE 1=1
     """
     params: list = []
     if account_id is not None:
@@ -1848,7 +1850,9 @@ def _leak_rows(conn, account_id, date_from, date_to):
         r['tags'] = tags_by_group.get(r['trade_group'], [])
         # The playbook setup name the trader tagged ('NONE' reads as 'No setup'), as in by_setup.
         r['setup_label'] = _SETUP_LABEL_MAP.get(r['setup'], r['setup']) if r['setup'] else None
-    return leaks.derive(rows)
+    # derive over every trade so breakeven and open ones still count in the sequence, then keep
+    # the ones with P&L, the same trades the Reports page shows
+    return [r for r in leaks.derive(rows) if r['net_pnl']]
 
 
 @app.get("/api/leaks")
@@ -1871,6 +1875,7 @@ def get_leaks(
         "management": {
             "by_hold_time": _ordered(_bucket_stats(rows, leaks.hold_bucket), _HOLD_ORDER),
             "by_management": _bucket_stats(rows, leaks.management_bucket),
+            "by_mistake": _bucket_stats(leaks.mistake_rows(rows), lambda r: r['mistake_tag']),
         },
         "costs": leaks.costs(rows),
         "coverage": leaks.coverage(rows),

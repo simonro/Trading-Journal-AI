@@ -5,7 +5,8 @@ Pure functions over trade rows (no database, no HTTP), so the rules are easy to 
 A *leak* is a bucket of trades, defined only by things known at entry (time, trade number,
 losses before it, how the day stood, size, instrument...), whose net P&L is negative. Its cost
 is what skipping those trades would have saved. Outcome slices such as hold time are not leaks:
-a stop-out is short by design, so they are reported under trade management instead.
+a stop-out is short by design, so they are reported under trade management instead. Mistake tags
+are logged after the trade and are mostly about what happened in it, so they sit there too.
 
 Rules:
 - A bucket needs MIN_TRADES trades, and the rest of its dimension needs as many, before it counts.
@@ -26,7 +27,7 @@ RECENT_MIN_TRADES = 10
 MAX_LEAKS = 3
 MAX_EDGES = 2
 MAX_NEW = 2
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 
 _DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -105,36 +106,59 @@ def _minutes_between(a, b):
         return None
 
 
+def trade_times(ex, side, date):
+    """Entry and exit times of one trade from its executions. Reports uses this too, so the two reconcile.
+
+    Fills are ordered by full timestamp (date and seconds), so hold_min is right for a trade held
+    overnight. notional is the size of the first entry only: an add made later was not known when
+    the trade was entered.
+    """
+    ea = 'BOT' if side == 'LONG' else 'SOLD'
+    xa = 'SOLD' if side == 'LONG' else 'BOT'
+    key = lambda e: (_stamp(e, date) or '', e.get('time', ''))
+    ent = sorted([e for e in ex if e.get('action') == ea], key=key)
+    xit = sorted([e for e in ex if e.get('action') == xa], key=key)
+    entry_ts = _stamp(ent[0], date) if ent else None
+    exit_ts = _stamp(xit[-1], date) if xit else None
+    entry_min = _mins(ent[0].get('time')) if ent else None
+    exit_min = _mins(xit[-1].get('time')) if xit else None
+    if entry_ts and exit_ts:
+        hold_min = _minutes_between(entry_ts, exit_ts)
+    else:
+        hold_min = exit_min - entry_min if entry_min is not None and exit_min is not None else None
+    first = [e for e in ent if _stamp(e, date) == entry_ts] if entry_ts else ent[:1]
+    try:
+        notional = sum(float(e.get('qty') or 0) * float(e.get('price') or 0) for e in first) or None
+    except (TypeError, ValueError):
+        notional = None
+    try:
+        bought = sum(float(e.get('qty') or 0) for e in ex if e.get('action') == 'BOT')
+        sold = sum(float(e.get('qty') or 0) for e in ex if e.get('action') == 'SOLD')
+        closed = bool(ent) and bool(xit) and abs(bought - sold) < 1e-6
+    except (TypeError, ValueError):
+        closed = False
+    return {
+        'entry_min': entry_min, 'exit_min': exit_min, 'hold_min': hold_min,
+        'n_exits': len({e.get('time') for e in xit}) if xit else 0,
+        'entry_ts': entry_ts, 'exit_ts': exit_ts, 'notional': notional, 'closed': closed,
+    }
+
+
 def derive(rows):
     """Add entry/exit minutes, notional, and the at-entry sequence features to each row.
 
-    entry_min, exit_min and hold_min copy the Reports calculation so the two reconcile. The
-    sequence features use full fill timestamps (date and seconds) instead: a trade counts as
-    "before" this one only if it closed earlier in the session this one was entered, so an open
-    position, a same-minute trade or a swing trade closing days later never leaks in.
+    Pass every trade in the range, breakeven and still-open ones included, so trade numbers and
+    loss streaks count every entry; drop the zero-P&L rows afterwards. The sequence features use
+    full fill timestamps: a trade counts as "before" this one only if it was fully closed earlier
+    in the session this one was entered, so an open position, a same-minute trade or a swing
+    trade closing days later never leaks in.
     """
     for r in rows:
         try:
             ex = json.loads(r.get('executions') or '[]')
         except Exception:
             ex = []
-        ea = 'BOT' if r.get('side') == 'LONG' else 'SOLD'
-        xa = 'SOLD' if r.get('side') == 'LONG' else 'BOT'
-        ent = sorted([e for e in ex if e.get('action') == ea], key=lambda e: e.get('time', ''))
-        xit = sorted([e for e in ex if e.get('action') == xa], key=lambda e: e.get('time', ''))
-        r['entry_min'] = _mins(ent[0].get('time')) if ent else None
-        r['exit_min'] = _mins(xit[-1].get('time')) if xit else None
-        r['hold_min'] = (r['exit_min'] - r['entry_min']
-                         if r['entry_min'] is not None and r['exit_min'] is not None else None)
-        r['n_exits'] = len({e.get('time') for e in xit}) if xit else 0
-        ent_ts = sorted(filter(None, (_stamp(e, r['date']) for e in ent)))
-        xit_ts = sorted(filter(None, (_stamp(e, r['date']) for e in xit)))
-        r['entry_ts'] = ent_ts[0] if ent_ts else None
-        r['exit_ts'] = xit_ts[-1] if xit_ts else None
-        try:
-            r['notional'] = sum(float(e.get('qty') or 0) * float(e.get('price') or 0) for e in ent) or None
-        except (TypeError, ValueError):
-            r['notional'] = None
+        r.update(trade_times(ex, r.get('side'), r['date']))
         try:
             r['dow'] = datetime.strptime((r['entry_ts'] or r['date'])[:10], '%Y-%m-%d').weekday()
         except Exception:
@@ -150,15 +174,16 @@ def derive(rows):
         for i, r in enumerate(day, 1):
             r['trade_no'] = i
             closed = sorted(
-                [o for o in day if o is not r and o['exit_ts'] and o['exit_ts'] < r['entry_ts']],
+                [o for o in day if o is not r and o['closed'] and o['exit_ts'] and o['exit_ts'] < r['entry_ts']],
                 key=lambda o: (o['exit_ts'], o.get('id') or 0))
             run = peak = 0.0
             streak = 0
             last_loss = None
             for o in closed:
-                run += o['net_pnl']
+                pnl = o.get('net_pnl') or 0
+                run += pnl
                 peak = max(peak, run)
-                if o['net_pnl'] < 0:
+                if pnl < 0:
                     streak += 1
                     last_loss = o['exit_ts']
                 else:
@@ -167,10 +192,11 @@ def derive(rows):
             r['loss_streak'] = streak
             r['since_loss'] = None if last_loss is None else _minutes_between(last_loss, r['entry_ts'])
 
-    # Usual size is the median of the earlier trades in the same ticker, so it is known at entry.
+    # Usual size is the median of the earlier trades in the same ticker and account, so it is known
+    # at entry and one account's size never sets another's.
     seen = defaultdict(list)
     for r in sorted(rows, key=lambda r: (r['entry_ts'] or '9999', r.get('id') or 0)):
-        key = (r.get('ticker'), r.get('instrument_type'))
+        key = (r.get('account_id'), r.get('ticker'), r.get('instrument_type'))
         prior = seen[key]
         r['size_ratio'] = (r['notional'] / median(prior)) if (r['notional'] and len(prior) >= 5) else None
         if r['notional'] and r['entry_ts']:
@@ -240,7 +266,6 @@ DIMENSIONS = [
     ('setup', 'Setup', lambda r: r.get('setup_label')),
     ('strategy', 'Strategy', lambda r: r.get('strategy') or None),
     ('source', 'Source', lambda r: r.get('idea_source') or None),
-    ('mistake', 'Mistake tag', _tags('mistake')),
     ('emotion', 'Emotion', lambda r: r.get('emotional_state') or None),
 ]
 # What "the rest" is for each dimension: every other trade that has a value in it.
@@ -249,12 +274,16 @@ REST_LABEL = {
     'setup': 'other trades with a setup tag',
     'strategy': 'other trades with a strategy',
     'source': 'other trades with a source',
-    'mistake': 'other trades with a mistake tag',
     'emotion': 'other trades with an emotion logged',
     'size': 'other trades in tickers you had traded 5+ times',
 }
 # Rows these dimensions depend on come from the diary, which covers few trades.
-DIARY_DIMENSIONS = {'mistake', 'emotion', 'strategy', 'source'}
+DIARY_DIMENSIONS = {'emotion', 'strategy', 'source'}
+
+
+def mistake_rows(rows):
+    """One row per (trade, mistake tag) for the breakdown shown beside the leaks, never ranked."""
+    return [dict(r, mistake_tag=v) for r in rows for v in (_tags('mistake')(r) or [])]
 
 
 def _keys(fn, r):
@@ -344,8 +373,22 @@ def _strip(f):
     return f
 
 
+def _bucket_nets(rows):
+    """Net P&L of every bucket over rows, with no minimum sample."""
+    nets = defaultdict(float)
+    for dim, _, fn in DIMENSIONS:
+        for r in rows:
+            for k in _keys(fn, r):
+                nets[f'{dim}:{k}'] += r['net_pnl']
+    return nets
+
+
 def find_leaks(rows):
-    """rows must already be derive()d. Returns leaks, edges and new-in-recent findings."""
+    """rows must already be derive()d. Returns leaks, edges and new-in-recent findings.
+
+    Every finding carries a key ("leak|", "edge|" or "new|" plus its id): an edge and a new leak
+    can share a bucket id while showing different periods, so sentences are stored by key.
+    """
     by_id = {}
     full = bucket_table(rows)
     for f in full:
@@ -390,16 +433,18 @@ def find_leaks(rows):
         rf = recent.get(lk['id'])
         lk['recent'] = None if rf is None else {'trades': rf['trades'], 'net_pnl': rf['net_pnl']}
 
-    # A bucket that is losing over the last 30 days but was not a leak over the whole range.
+    # A bucket that is losing over the last 30 days but not over the whole range. The whole-range
+    # check has no minimum sample: a bucket too small to rank there may still be losing.
+    full_net = _bucket_nets(rows)
     new = sorted([f for f in recent.values()
-                  if f['net_pnl'] < 0 and f['id'] not in leak_dims
-                  and (by_id.get(f['id']) is None or by_id[f['id']]['net_pnl'] >= 0)],
+                  if f['net_pnl'] < 0 and f['id'] not in leak_dims and full_net.get(f['id'], 0) >= 0],
                  key=lambda f: f['net_pnl'])[:MAX_NEW]
 
     return {
-        'leaks': [_strip(f) for f in leaks],
-        'edges': [_strip(f) for f in picked_edges],
-        'new': [dict(_strip(f), recent={'trades': f['trades'], 'net_pnl': f['net_pnl']}) for f in new],
+        'leaks': [dict(_strip(f), key=f"leak|{f['id']}") for f in leaks],
+        'edges': [dict(_strip(f), key=f"edge|{f['id']}") for f in picked_edges],
+        'new': [dict(_strip(f), key=f"new|{f['id']}", recent={'trades': f['trades'], 'net_pnl': f['net_pnl']})
+                for f in new],
         'total_cost': round(sum(f['dedup_cost'] for f in leaks), 2),
         'recent_from': min((r['date'] for r in recent_rows), default=None),
     }
@@ -430,7 +475,7 @@ def coverage(rows):
 def cache_key(result):
     """Changes whenever a number Claude would explain changes."""
     def slim(f):
-        return [f['id'], f['trades'], f['net_pnl'], f['avg_pnl'], f['rest_avg_pnl'],
+        return [f['key'], f['trades'], f['net_pnl'], f['avg_pnl'], f['rest_avg_pnl'],
                 f['win_rate'], f['confidence'], f.get('recent'), f.get('overlap_trades')]
     payload = {
         'v': PROMPT_VERSION,
@@ -447,6 +492,7 @@ def explain_payload(result):
         d = {k: f.get(k) for k in ('id', 'dimension_label', 'bucket', 'trades', 'net_pnl', 'avg_pnl',
                                     'rest_avg_pnl', 'rest_label', 'win_rate', 'confidence', 'recent',
                                     'overlap_trades', 'diary_based')}
+        d['id'] = f['key']
         d['kind'] = kind
         return d
     return ([slim(f, 'leak') for f in result['leaks']]

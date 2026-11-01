@@ -90,6 +90,18 @@ body:has(.xl-page) .brain-launcher, body:has(.xl-replay) .brain-launcher { displ
 .xl-inline-stop .xl-fields label { display: flex; gap: 12px; align-items: center; }
 .xl-exclusion-line { color: var(--text-secondary); font-size: 13px; }
 .xl-exclusion-line button { color: var(--accent-line); margin-left: 10px; }
+.xl-load-missing { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 10px; }
+.xl-exclusion-line .xl-load-missing-btn { color: var(--text-primary); margin-left: 0; }
+.xl-progress-wrap { flex: 1 1 100%; display: grid; grid-template-columns: auto minmax(120px, 1fr); align-items: center; gap: 8px 16px; }
+.xl-progress-label { color: var(--text-primary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.xl-progress { height: 6px; border-radius: var(--radius-sm); background: var(--surface-control); overflow: hidden; }
+.xl-progress > span { display: block; height: 100%; background: var(--accent-line); transform-origin: left center; transition: transform 400ms ease-out; }
+.xl-load-result { flex: 1 1 100%; margin: 0; color: var(--text-primary); }
+.xl-load-failures { flex: 1 1 100%; list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.xl-load-failures li { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 4px 16px; padding: 8px 0; border-top: 1px solid var(--divider-soft); }
+.xl-load-failures li > span:last-child { color: var(--caution); }
+.xl-load-missing .xl-notice { flex: 1 1 100%; }
+@media (max-width: 640px) { .xl-load-failures li, .xl-progress-wrap { grid-template-columns: minmax(0, 1fr); } }
 .xl-simple-exclusions { padding: 0; margin: 0; list-style: none; max-height: 300px; overflow: auto; }
 .xl-simple-exclusions li { display: flex; gap: 18px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--divider-soft); font-size: 13px; }
 .xl-simple-exclusions li span:nth-child(2) { flex: 1; color: var(--text-secondary); }
