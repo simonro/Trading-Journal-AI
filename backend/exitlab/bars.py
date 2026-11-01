@@ -54,15 +54,31 @@ def cached(conn, symbol, start, end, feed):
     return [Bar(timestamp(r["ts"]), r["open"], r["high"], r["low"], r["close"], r["volume"], r["feed"], r["vwap"]) for r in rows]
 
 
+def covered(conn, symbol, start, end, feed, existing=None):
+    """True when a window needs no request: fetched before (sparse windows stay sparse) or gap-free."""
+    if existing is None:
+        existing = cached(conn, symbol, start, end, feed)
+    fetched = conn.execute("SELECT 1 FROM market_bar_windows WHERE symbol=? AND feed=? AND start<=? AND end>=?",
+                           (symbol.upper(), feed, iso(start), iso(end))).fetchone()
+    return bool(fetched) or continuous(existing, start, end)
+
+
+def loadable(end, now=None):
+    return end <= (now or datetime.now(UTC)) - timedelta(minutes=15)
+
+
 def fetch(conn, symbol, start, end, feed="sip", refresh=False, client=None):
     if feed not in ("sip", "iex") or end <= start:
         raise ValueError("invalid_bar_request")
-    if end > datetime.now(UTC) - timedelta(minutes=15):
-        raise ValueError("Only completed historical windows older than 15 minutes are supported")
+    if not loadable(end):
+        # Alpaca serves bars older than 15 minutes: clip a window that runs into the last 15 minutes
+        # (today's session) instead of refusing it. The clipped window is recorded as fetched only up to
+        # its clipped end, so a later request for the full window fetches the rest.
+        end = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=15)
+        if end <= start:
+            raise ValueError("Prices for this session are not available yet. Try again 15 minutes after the bars you need.")
     existing = cached(conn, symbol, start, end, feed)
-    fetched = conn.execute("SELECT 1 FROM market_bar_windows WHERE symbol=? AND feed=? AND start<=? AND end>=?",
-                           (symbol.upper(), feed, iso(start), iso(end))).fetchone()
-    if not refresh and (fetched or continuous(existing, start, end)):
+    if not refresh and covered(conn, symbol, start, end, feed, existing):
         return {"feed": feed, "bars": len(existing), "cached": True}
     own_client = client is None
     client = client or httpx.Client(timeout=30)

@@ -40,18 +40,23 @@ export function reasonText(r) {
   return reasons[r] || `${r.replaceAll('_', ' ')}. Review the trade data or choose another rule.`;
 }
 export const needsPrices = reasons => (reasons || []).some(r => /coverage|warmup|minute_missing/.test(r));
+// One request for the trade's day (stock and SPY) plus the previous regular session.
+// The cache answers without a request when those windows are already complete.
+export async function fetchSessionPrices(journalTrade, refresh) {
+  const day = journalTrade.date;
+  const result = await exitlabApi.fetchBars({ symbol: journalTrade.ticker,
+    start: `${day}T08:00:00Z`, end: `${day}T21:00:00Z`, feed: 'sip',
+    include_warmup: true, refresh });
+  if ([result.data, result.data.benchmark, result.data.warmup, result.data.warmup_benchmark]
+    .some(item => item && item.feed !== 'sip')) throw new Error('SIP prices are unavailable for part of this request.');
+}
 export function LoadPrices({ row, reasons = [], onLoaded, disabled = false }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   if (!row || !needsPrices(reasons)) return null;
   async function load() {
     setBusy(true); setError('');
     try {
-      const day = row.journal_trade.date;
-      const result = await exitlabApi.fetchBars({ symbol: row.journal_trade.ticker,
-        start: `${day}T08:00:00Z`, end: `${day}T21:00:00Z`, feed: 'sip',
-        include_warmup: true, refresh: true });
-      if ([result.data, result.data.benchmark, result.data.warmup, result.data.warmup_benchmark]
-        .some(item => item && item.feed !== 'sip')) throw new Error('SIP prices are unavailable for part of this request.');
+      await fetchSessionPrices(row.journal_trade, true);
       await onLoaded();
     } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   }

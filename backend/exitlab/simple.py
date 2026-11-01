@@ -128,6 +128,9 @@ def history(conn, account_id, only_ids=None):
         row['actual_r'] = (t.direction*(t.exit-t.entry)/t.risk if t and t.risk and not e['reasons'] else None)
         result['rows'].append(row)
     result['costs'] = settings(conn).model_dump()
+    if only_ids is None:
+        from .autoload import plan
+        result['missing_prices'] = len(plan(conn, account_id, 'sip', entries=entries))
     return result, shown
 
 
