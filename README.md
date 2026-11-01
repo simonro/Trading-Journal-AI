@@ -26,9 +26,9 @@ synthetic demo seed, not anyone's real trades.
 
 ## Watch the walkthrough
 
-[![Watch on YouTube](https://img.shields.io/badge/Watch%20on-YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
+[![Watch on YouTube](https://img.shields.io/badge/Watch%20on%20YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
-[![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/video-thumbnail.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
+[![Watch: Better Than TradeZella? The Free AI Trading Journal I Built](docs/walkthrough-video.jpg)](https://www.youtube.com/watch?v=rsNizd9niG4)
 
 A tour of the current version: the Dashboard, Trade View, Day Review, Leaks and Exit Lab, on a
 demo account with synthetic trades. The install and update prompts for Claude Code or Codex are in
