@@ -1,8 +1,8 @@
 import json
 import re
-from ai_analysis import get_client, response_text
+from ai_analysis import get_client, response_text, raise_if_truncated, DIARY_MAX_TOKENS
 
-MODEL = "claude-opus-5"
+MODEL = "claude-opus-5-5"
 
 DAILY_SUMMARY_PROMPT = """You are a professional trading coach producing an end-of-day performance review for a day trader.
 
@@ -189,10 +189,14 @@ Generate the daily coaching summary JSON."""
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
+        # 4096 was too tight: adaptive thinking spends from the same budget, so a
+        # 10-trade day cut the JSON off mid-string.
+        max_tokens=DIARY_MAX_TOKENS,
+        output_config={"effort": "medium"},
         system=DAILY_SUMMARY_PROMPT,
         messages=[{"role": "user", "content": user_content}],
     )
+    raise_if_truncated(response, "daily review")
 
     raw = response_text(response)
     if raw.startswith("```"):

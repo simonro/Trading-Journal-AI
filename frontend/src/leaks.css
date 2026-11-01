@@ -1,0 +1,79 @@
+/* Leak Finder (Reports > Leaks). Tokens only; V3 hairlines, no cards. */
+
+.lk { display: flex; flex-direction: column; }
+
+/* ── the headline and the kept-vs-leaked bar ── */
+.lk-hero { padding: 6px 0 26px; border-bottom: 1px solid var(--divider); }
+.lk-head {
+  font-family: var(--font-display); font-weight: 700; font-size: clamp(26px, 3.4vw, 38px);
+  letter-spacing: -0.035em; line-height: 1.08; margin: 0; max-width: 34ch; text-wrap: balance;
+}
+.lk-sub { color: var(--text-secondary); font-size: 14px; line-height: 1.5; margin: 12px 0 0; max-width: 68ch; }
+.lk-note { color: var(--text-tertiary); font-size: 12.5px; line-height: 1.45; margin: 16px 0 0; max-width: 80ch; }
+
+.lk-kept { margin-top: 26px; max-width: 920px; }
+.lk-kept-figs { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+.lk-kept-right { text-align: right; }
+.lk-kept-val {
+  font-family: var(--font-display); font-weight: 600; font-size: 28px; letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums lining-nums; margin-top: 4px;
+}
+.lk-kept-bar { display: flex; height: 10px; margin-top: 12px; gap: 2px; }
+.lk-kept-in, .lk-kept-out { display: block; flex: var(--f) 1 0; min-width: 2px; border-radius: 2px; }
+.lk-kept-in { background: var(--result-pos); opacity: 0.85; }
+.lk-kept-out {
+  border: 1px solid var(--neg-line);
+  background: repeating-linear-gradient(135deg, var(--cal-neg) 0 5px, transparent 5px 9px);
+}
+
+/* ── one finding per row, separated by hairlines ── */
+.lk-group { display: flex; flex-direction: column; }
+.lk-group-head { padding: 34px 0 8px; }
+.lk-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 0 14px;
+  padding: 22px 0 20px; border-bottom: 1px solid var(--divider-soft);
+}
+.lk-row.lk-unranked { grid-template-columns: minmax(0, 1fr); }
+.lk-rank {
+  font-weight: 800; font-size: 34px; line-height: 1; letter-spacing: -0.04em;
+  color: var(--text-tertiary); padding-top: 2px;
+}
+.lk-body { min-width: 0; }
+.lk-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+.lk-name h3 {
+  font-family: var(--font-display); font-weight: 600; font-size: 21px;
+  letter-spacing: -0.025em; line-height: 1.15; margin: 0;
+}
+.lk-dim { color: var(--text-tertiary); font-size: 12.5px; margin-top: 3px; }
+.lk-amt { text-align: right; }
+.lk-amt-val { font-weight: 700; font-size: 28px; letter-spacing: -0.03em; line-height: 1; }
+.lk-amt-read { color: var(--text-tertiary); font-size: 12px; margin-top: 4px; }
+
+.lk-sentence { margin: 12px 0 0; font-size: 15px; line-height: 1.5; color: var(--text-primary); max-width: 72ch; }
+
+.lk-facts { display: flex; flex-wrap: wrap; gap: 10px 34px; margin: 14px 0 0; }
+.lk-fact dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; font-size: 14px; }
+.lk-vs { color: var(--text-tertiary); }
+
+.lk-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.lk-conf-solid { color: var(--caution); border-color: var(--caution-line); }
+.lk-conf-noise { color: var(--text-tertiary); }
+
+.lk-link {
+  background: none; border: 0; padding: 2px 0; margin-left: 6px; cursor: pointer;
+  color: var(--accent-line); font: inherit; font-size: 13px;
+  text-decoration: underline; text-decoration-color: var(--accent-line-soft); text-underline-offset: 3px;
+}
+.lk-link:hover { text-decoration-color: var(--accent-line); }
+.lk-link:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; border-radius: 2px; }
+
+.lk-trades { margin-top: 14px; max-width: 720px; }
+.lk-trades .lk-link { margin: 10px 0 0; }
+
+@media (max-width: 640px) {
+  .lk-row { grid-template-columns: 30px minmax(0, 1fr); gap: 0 10px; }
+  .lk-rank { font-size: 24px; }
+  .lk-amt { text-align: left; }
+  .lk-amt-val { font-size: 24px; }
+  .lk-kept-right { text-align: left; }
+}

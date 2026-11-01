@@ -27,6 +27,8 @@ export default function App() {
   const [selectedTrade, setSelectedTrade] = useState(null);
   const [detailTab, setDetailTab] = useState('Stats');
   const [detailOrigin, setDetailOrigin] = useState('trades');
+  // Reports tab and range to restore when Back from a trade returns to Reports.
+  const [reportsReturn, setReportsReturn] = useState(null);
   const [tradeNavList, setTradeNavList] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   // Open Day Review on the most recent session, not on today. Today has no
@@ -69,12 +71,15 @@ export default function App() {
   const navigate = (p) => {
     if (p !== 'trades') setTradesFilter({ dateFrom: '', dateTo: '' });
     if (p !== 'trade-detail') setSelectedTrade(null);
+    setReportsReturn(null);
     setPage(p);
   };
 
-  const handleOpenDetail = (trade, list = [], initialTab = 'Stats') => {
+  // `from` lets another page (Reports > Leaks) be the one Back returns to.
+  const handleOpenDetail = (trade, list = [], initialTab = 'Stats', from = null) => {
     setDetailTab(initialTab);
-    setDetailOrigin(initialTab === 'Exits' ? 'exit-lab' : 'trades');
+    setDetailOrigin(from?.page || (initialTab === 'Exits' ? 'exit-lab' : 'trades'));
+    if (from?.page === 'reports') setReportsReturn(from.state || null);
     setSelectedTrade(trade);
     setTradeNavList(list);
     setPage('trade-detail');
@@ -84,6 +89,7 @@ export default function App() {
     <div className="app-shell">
       <AppHeader
         page={page}
+        detailOrigin={detailOrigin}
         onNavigate={navigate}
         accounts={accounts}
         selectedAccountId={selectedAccountId}
@@ -121,7 +127,8 @@ export default function App() {
           <TradeDetail
             key={selectedTrade.id}
             initialTab={detailTab}
-            backLabel={detailOrigin === 'exit-lab' ? 'Back to Exit Lab' : 'Back to trades'}
+            backLabel={detailOrigin === 'exit-lab' ? 'Back to Exit Lab'
+              : detailOrigin === 'reports' ? 'Back to Leaks' : 'Back to trades'}
             trade={selectedTrade}
             tradeNavList={tradeNavList}
             onBack={() => { setSelectedTrade(null); setPage(detailOrigin); }}
@@ -152,7 +159,9 @@ export default function App() {
             onOpenDetail={handleOpenDetail}
           />
         )}
-        {page === 'reports' && <Reports accountId={selectedAccountId} />}
+        {page === 'reports' && (
+          <Reports accountId={selectedAccountId} onOpenDetail={handleOpenDetail} initial={reportsReturn} />
+        )}
         {page === 'help' && <Help />}
         {page === 'settings' && <Settings />}
         {page === 'exit-lab' && <ExitLab accountId={selectedAccountId} accounts={accounts} onSelectAccount={setSelectedAccountId} onOpenDetail={handleOpenDetail} />}

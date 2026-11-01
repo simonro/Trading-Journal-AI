@@ -1,6 +1,7 @@
 import os
 import json
 import sqlite3
+import threading
 import aiofiles
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -26,7 +27,9 @@ from ai_analysis import (
     build_brain_context,
     generate_brain_response,
     generate_weekly_summary,
+    explain_leaks,
 )
+import leaks
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from exitlab.api import router as exitlab_router
@@ -1811,6 +1814,121 @@ def get_reports(
         "by_source": _bucket_stats(raw, lambda r: r['idea_source']),
         "by_tag": by_tag,
     }
+
+
+# ── Leak Finder ──────────────────────────────────────────────────────────────
+# backend/leaks.py holds the rules. These endpoints load the same trades the Reports
+# page does (net P&L not zero, same account and date filters), so the two reconcile.
+
+_leak_explain_lock = threading.Lock()
+
+
+def _leak_rows(conn, account_id, date_from, date_to):
+    sql = """
+        SELECT t.id, t.account_id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
+               t.gross_pnl, t.commissions, t.instrument_type, t.executions, t.setup,
+               t.mfe_pct, t.mae_pct, t.exit_efficiency,
+               ta.strategy, ta.emotional_state, ta.idea_source
+        FROM trades t
+        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
+    """
+    params: list = []
+    if account_id is not None:
+        sql += " AND t.account_id = ?"
+        params.append(account_id)
+    if date_from:
+        sql += " AND t.date >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND t.date <= ?"
+        params.append(date_to)
+    sql += " ORDER BY t.date, t.id"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    tags_by_group = {}
+    for tr in conn.execute(
+        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
+        "WHERE tag_type IN ('mistake', 'emotion') AND TRIM(tag_value) <> ''"
+    ).fetchall():
+        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+    for r in rows:
+        r['tags'] = tags_by_group.get(r['trade_group'], [])
+        # The playbook setup name the trader tagged ('NONE' reads as 'No setup'), as in by_setup.
+        r['setup_label'] = _SETUP_LABEL_MAP.get(r['setup'], r['setup']) if r['setup'] else None
+    return leaks.derive(rows)
+
+
+@app.get("/api/leaks")
+def get_leaks(
+    account_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    rows = _leak_rows(conn, account_id, date_from, date_to)
+    if not rows:
+        return {"has_data": False}
+    res = leaks.find_leaks(rows)
+    res.update({
+        "has_data": True,
+        "trade_count": len(rows),
+        "net_pnl": round(sum(r['net_pnl'] for r in rows), 2),
+        "cache_key": leaks.cache_key(res),
+        # Outcomes, not entry decisions: shown beside the leaks, never ranked as one.
+        "management": {
+            "by_hold_time": _ordered(_bucket_stats(rows, leaks.hold_bucket), _HOLD_ORDER),
+            "by_management": _bucket_stats(rows, leaks.management_bucket),
+        },
+        "costs": leaks.costs(rows),
+        "coverage": leaks.coverage(rows),
+    })
+    return res
+
+
+@app.get("/api/leaks/explain")
+def explain_leak_findings(
+    account_id: int | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    conn: sqlite3.Connection = Depends(get_connection),
+):
+    """Claude's sentence for each finding, cached by a hash of the numbers."""
+    rows = _leak_rows(conn, account_id, date_from, date_to)
+    if not rows:
+        return {"sentences": {}}
+    res = leaks.find_leaks(rows)
+    key = leaks.cache_key(res)
+
+    def cached():
+        row = conn.execute("SELECT content FROM leak_explanations WHERE cache_key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    hit = cached()
+    if hit is not None:
+        return {"cache_key": key, "cached": True, "sentences": hit}
+    payload = leaks.explain_payload(res)
+    if not payload:
+        return {"cache_key": key, "cached": False, "sentences": {}}
+
+    # One generation at a time, so a page opened twice does not pay for two calls.
+    with _leak_explain_lock:
+        hit = cached()
+        if hit is not None:
+            return {"cache_key": key, "cached": True, "sentences": hit}
+        try:
+            sentences = explain_leaks(payload)
+        except Exception as e:
+            return {"cache_key": key, "cached": False, "sentences": {}, "error": str(e)}
+        # Cache only a complete answer, so a partial one is retried on the next visit.
+        if not all(f["id"] in sentences for f in payload):
+            return {"cache_key": key, "cached": False, "sentences": sentences}
+        conn.execute(
+            "INSERT OR REPLACE INTO leak_explanations (cache_key, content, generated_at) VALUES (?, ?, ?)",
+            (key, json.dumps(sentences), datetime.now().isoformat()),
+        )
+        conn.commit()
+    return {"cache_key": key, "cached": False, "sentences": sentences}
 
 
 @app.get("/api/edge-report")

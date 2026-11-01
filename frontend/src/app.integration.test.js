@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, updateApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, reportsApi, leaksApi, updateApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -81,6 +81,23 @@ jest.mock('./api', () => {
     goalsApi: withDefault({ get: fn(() => ok({ win_rate: 65 })), put: fn(() => ok({ win_rate: 65 })) }),
     reportsApi: withDefault({ get: fn(() => Promise.reject(new Error('no reports in tests'))) }),
     edgeReportApi: withDefault({}),
+    leaksApi: withDefault({
+      get: fn(() => ok({
+        has_data: true, trade_count: 40, net_pnl: 500, total_cost: 750, recent_from: '2026-09-01',
+        cache_key: 'k1', coverage: { trades: 40, diary_trades: 4 },
+        leaks: [{
+          id: 'entry_window:11:00-13:30', dimension: 'entry_window', dimension_label: 'Entry time',
+          bucket: '11:00-13:30', trades: 25, net_pnl: -750, avg_pnl: -30, rest_avg_pnl: 50, win_rate: 20,
+          t: -9.1, confidence: 'solid', dedup_cost: 750, overlap_trades: 0, diary_based: false,
+          recent: { trades: 12, net_pnl: -360 }, trade_ids: [101, 102],
+          sentence: 'These 25 trades lost $750 in total, -$30 a trade against $50 for your other trades.',
+        }],
+        edges: [], new: [],
+        management: { by_hold_time: [], by_management: [] },
+        costs: [{ instrument: 'STOCK', trades: 40, gross_pnl: 540, commissions: 40, net_pnl: 500, per_trade: 1 }],
+      })),
+      explain: fn(() => ok({ cache_key: 'k1', cached: true, sentences: { 'entry_window:11:00-13:30': 'Midday entries cost you $750.' } })),
+    }),
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
     updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false })) }),
@@ -174,11 +191,13 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
   const tablist = await screen.findByRole('tablist');
   const names = within(tablist).getAllByRole('tab').map(t => t.textContent.trim());
-  expect(names).toEqual(['Overview', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
+  expect(names).toEqual(['Overview', 'Leaks', 'Setups & Strategy', 'Sources & Tags', 'Timing', 'Execution', 'Symbols', 'Psychology']);
   const overview = within(tablist).getByRole('tab', { name: 'Overview' });
   expect(overview).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(overview, { key: 'ArrowRight' });
-  expect(within(tablist).getByRole('tab', { name: 'Setups & Strategy' })).toHaveAttribute('aria-selected', 'true');
+  expect(within(tablist).getByRole('tab', { name: 'Leaks' })).toHaveAttribute('aria-selected', 'true');
+  // Opening Leaks fetches them; let that settle inside act.
+  await act(async () => {});
 });
 
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
@@ -207,7 +226,7 @@ test('Trade View opens Trade Details with all six tabs, back and previous/next',
 test('Import keeps broker CSV import and diary analysis, with keyboard dropzones', async () => {
   await renderApp();
   fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /^Import$/ }));
-  expect(await screen.findByRole('heading', { name: /Import Broker CSV/ })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: /Upload CSV File/ })).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: /Analyze Trading Diary/ })).toBeInTheDocument();
   // Both supported brokers stay selectable, with auto-detect as the default.
   const broker = screen.getByLabelText('Broker');
@@ -359,6 +378,31 @@ test('Goals save failure is shown and keeps the panel open', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(/Could not save goals: Server error/);
   expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
+});
+
+test('Reports > Leaks ranks a leak, shows the Claude sentence, and Back from a trade returns to Leaks', async () => {
+  reportsApi.get.mockImplementation(() => Promise.resolve({ data: {
+    has_data: true, trade_count: 40, equity_curve: [], by_month: [],
+    summary: { net_pnl: 500, max_drawdown: -100, max_drawdown_date: '2026-09-02', trading_days: 25,
+      green_days: 15, red_days: 10, best_day: 200, worst_day: -100, avg_green_day: 50, avg_red_day: -30,
+      longest_win_streak: 4, longest_loss_streak: 2, avg_trades_per_day: 1.6 },
+  } }));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Leaks' }));
+  expect(await screen.findByRole('heading', { name: 'One leak cost you $750 in this range.' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Entries 11:00-13:30' })).toBeInTheDocument();
+  expect(await screen.findByText('Midday entries cost you $750.')).toBeInTheDocument();
+  expect(leaksApi.explain).toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show 25 trades' }));
+  const row = await screen.findByRole('row', { name: /Open META trade/ });
+  fireEvent.click(row);
+  await screen.findByRole('tablist', { name: 'Trade review sections' });
+  expect(within(nav()).getByRole('button', { name: 'Reports' })).toHaveAttribute('aria-current', 'page');
+  fireEvent.click(screen.getByRole('button', { name: /Back to Leaks/ }));
+  expect(await screen.findByRole('tab', { name: 'Leaks' })).toHaveAttribute('aria-selected', 'true');
+  expect(await screen.findByText('Midday entries cost you $750.')).toBeInTheDocument();
 });
 
 test('a newer release shows a dismissible update notice with the update steps', async () => {

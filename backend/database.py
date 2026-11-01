@@ -116,6 +116,14 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        -- Leak Finder sentences, keyed by a hash of the numbers they explain
+        -- (leaks.cache_key), so Claude is asked again only when the numbers change.
+        CREATE TABLE IF NOT EXISTS leak_explanations (
+            cache_key TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_trades_account_date ON trades(account_id, date);
         CREATE INDEX IF NOT EXISTS idx_trades_group ON trades(trade_group);
         CREATE INDEX IF NOT EXISTS idx_analysis_group ON trade_analysis(trade_group);
