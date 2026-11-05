@@ -206,7 +206,8 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
 - **Settings**: the name library. Strategies, sources and tags in one place, with rename, merge and
   delete. Merging rewrites every trade that used the old name and remembers it, so the next diary
   analysis that produces the duplicate saves it under the name you kept
-- **Import**: Thinkorswim account statement CSV and Interactive Brokers (IBKR) Activity Statement CSV, with a broker dropdown (auto-detect by default). Any other broker imports through a generic CSV template, one row per fill
+- **Import**: Thinkorswim account statement CSV and Interactive Brokers (IBKR) Activity Statement CSV, with a broker dropdown (auto-detect by default). Any other broker imports through a generic CSV template, one row per fill. Thinkorswim option
+  spreads: a vertical is one trade at its net price, while calendar, diagonal and custom orders keep every leg
 
 ## Screenshots
 
@@ -310,6 +311,11 @@ Back up `trading_journal.db` first if you have trades you care about. It is a si
 copying it somewhere safe is the whole backup.
 
 To check what changed, see the [releases page](https://github.com/simonro/Trading-Journal-AI/releases).
+
+**Re-importing a day after an import fix.** An import skips fills that are already stored, so a
+plain re-import leaves old rows as they were. Open the day, delete the affected trades with the delete
+button on each trade row (notes and tags on them go too), then import that day's statement again.
+v1.5.2 needs this for Thinkorswim days with option spreads, which earlier versions overstated.
 
 ## Importing from a broker that is not listed
 

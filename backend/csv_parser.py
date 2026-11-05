@@ -71,13 +71,20 @@ def _to_exchange_time(date_str: str, time_str: str, from_tz: str = IMPORT_LOCAL_
     return eastern.strftime('%Y-%m-%d'), eastern.strftime('%H:%M:%S')
 
 
+def _strike_label(strike) -> str:
+    return str(int(strike)) if strike and float(strike) == int(float(strike)) else str(strike or 0)
+
+
 def trade_group_key(date_str: str, ticker: str, instrument_type: str, seq: int,
                     option_expiry: str | None = None, option_strike: float | None = None,
-                    option_type: str | None = None) -> str:
-    """Build trade group key. Options include contract details to avoid collisions."""
+                    option_type: str | None = None, option_strike2: float | None = None) -> str:
+    """Build trade group key. Options include contract details to avoid collisions.
+    A vertical carries both strikes ('635-630'), so two verticals sharing one strike never collide."""
     base = f"{date_str}_{ticker}_{instrument_type}"
     if instrument_type == 'OPTION' and option_expiry:
-        strike = int(option_strike) if option_strike and float(option_strike) == int(float(option_strike)) else (option_strike or 0)
+        strike = _strike_label(option_strike)
+        if option_strike2:
+            strike += f"-{_strike_label(option_strike2)}"
         base += f"_{option_expiry}_{strike}_{option_type or ''}"
     return f"{base}_{seq}"
 
@@ -91,16 +98,17 @@ def parse_option_description(description: str) -> dict | None:
     """
     DATE_PART = (r'.*?(\d{1,2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+(\d{2})')
 
-    # Vertical spread: ticker follows "VERTICAL", strike is "400/405"
+    # Vertical spread: ticker follows "VERTICAL", strikes are "400/405" (first listed, second listed).
+    # Booked as one fill at the net price; option_strike2 keeps verticals that share a strike apart.
     vertical = re.compile(
-        r'^(BOT|SOLD)\s+[+-]?(\d+)\s+VERTICAL\s+([A-Z]+)\s+100'
+        r'^(BOT|SOLD)\s+[+-]?(\d+)\s+VERTICAL\s+([A-Z][A-Z0-9.]*)\s+\d+'
         + DATE_PART +
         r'\s+([\d.]+)/([\d.]+)\s+(CALL|PUT)\s+@([\d.]+)',
         re.IGNORECASE
     )
     m = vertical.match(description.strip())
     if m:
-        action, qty, ticker, day, month_str, year_2d, lower_strike, upper_strike, opt_type, price = m.groups()
+        action, qty, ticker, day, month_str, year_2d, first_strike, second_strike, opt_type, price = m.groups()
         year = 2000 + int(year_2d)
         month = MONTH_MAP[month_str.upper()]
         expiry = f"{year:04d}-{month:02d}-{int(day):02d}"
@@ -111,7 +119,8 @@ def parse_option_description(description: str) -> dict | None:
             'price': float(price),
             'instrument_type': 'OPTION',
             'option_expiry': expiry,
-            'option_strike': float(lower_strike),
+            'option_strike': float(first_strike),
+            'option_strike2': float(second_strike),
             'option_type': opt_type.upper(),
         }
 
@@ -352,15 +361,37 @@ def parse_trade_history_section(rows: list[list[str]], import_tz: str = IMPORT_L
     header = [h.strip().upper() for h in rows[header_idx]]
     col = {h: i for i, h in enumerate(header)}
 
+    # Multi-leg orders print the first leg with the exec time and the spread type, then one
+    # row per further leg with both left blank. A VERTICAL is skipped whole: Cash Balance
+    # already books it as one fill at the net price, and adding its legs counted the short
+    # leg on top of the net and lost the long leg, overstating the day's P&L.
+    # Other multi-leg types (CALENDAR, DIAGONAL, CUSTOM) never parse in Cash Balance, so
+    # every leg is taken from here, the blank rows inheriting the first leg's time.
+    spread_idx = col.get('SPREAD', 2)
+    net_idx = col.get('NET PRICE', 11)
+    parent = None  # (spread type, date, time) of the last row that carried an exec time
+
     executions = []
     for row in rows[header_idx + 1:]:
         if len(row) < 7:
+            parent = None
             continue
 
         exec_time_str = row[col.get('EXEC TIME', 1)].strip() if col.get('EXEC TIME', 1) < len(row) else ''
-        if not exec_time_str or ' ' not in exec_time_str:
+        spread = row[spread_idx].strip().upper() if spread_idx < len(row) else ''
+        first_leg = False
+        if exec_time_str and ' ' in exec_time_str:
+            date_part, time_part = exec_time_str.split(' ', 1)
+            parent = (spread, date_part, time_part)
+            first_leg = True
+        elif not exec_time_str and not spread and parent and parent[0] not in ('', 'STOCK', 'SINGLE', 'FUTURE'):
+            spread, date_part, time_part = parent
+        else:
+            parent = None
             continue
-        date_part, time_part = exec_time_str.split(' ', 1)
+        if spread == 'VERTICAL':
+            continue
+        multileg = spread not in ('', 'STOCK', 'SINGLE', 'FUTURE')
 
         side_str = row[col.get('SIDE', 3)].strip().upper() if col.get('SIDE', 3) < len(row) else ''
         if side_str not in ('BUY', 'SELL'):
@@ -422,7 +453,7 @@ def parse_trade_history_section(rows: list[list[str]], import_tz: str = IMPORT_L
         if action == 'BOT':
             amount = -amount
 
-        executions.append({
+        ex = {
             'action': action,
             'qty': qty,
             'ticker': symbol,
@@ -436,7 +467,17 @@ def parse_trade_history_section(rows: list[list[str]], import_tz: str = IMPORT_L
             'time': time_part,
             'amount': round(amount, 2),
             'commission': 0.0,
-        })
+        }
+        if multileg:
+            # Cash Balance never books these legs, so they skip the cross-section dedup;
+            # the first leg carries the order's net price so its fees can be matched to it.
+            ex['_multileg'] = True
+            if first_leg:
+                try:
+                    ex['_net_price'] = abs(float(row[net_idx].strip()))
+                except (ValueError, IndexError):
+                    pass
+        executions.append(ex)
 
     return executions
 
@@ -552,7 +593,7 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
         # Total commission = misc fees + commissions & fees
         total_commission = abs(misc_fees) + abs(commission)
 
-        parsed = parse_cash_description(desc)
+        parsed = parse_cash_description(desc) or parse_multileg_fee(desc)
         if not parsed:
             continue
 
@@ -567,6 +608,26 @@ def parse_cash_balance_section(rows: list[list[str]], date_filter: str | None = 
         executions.append(parsed)
 
     return executions
+
+
+MULTILEG_TYPES = ('IRON CONDOR', 'IRON BUTTERFLY', 'VERT ROLL', 'DIAG ROLL', 'CAL ROLL', 'CALENDAR',
+                  'DIAGONAL', 'CUSTOM', 'STRADDLE', 'STRANGLE', 'BUTTERFLY', 'CONDOR', 'COMBO',
+                  'COLLAR', 'COVERED', 'BACKRATIO')
+
+
+def parse_multileg_fee(description: str) -> dict | None:
+    """A Cash Balance line for a multi-leg order other than a VERTICAL:
+    'BOT +2 CALENDAR AAPL 100 (Weeklys) 13 MAR 26/27 FEB 26 230 PUT @3.25 CBOE'.
+    Its legs are booked from Trade History; this line only carries the fees, returned as a
+    '_fee_only' record matched to the order's first leg by date, ticker, quantity and net price."""
+    kinds = '|'.join(t.replace(' ', r'\s+') for t in MULTILEG_TYPES)
+    m = re.match(
+        r'^(BOT|SOLD)\s+[+-]?(\d+)\s+(?:-?\d+(?:/-?\d+)+\s+)?(?:' + kinds + r')\s+([A-Z][A-Z0-9.]*)\s.*@([\d.]+)',
+        description.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    _action, qty, ticker, price = m.groups()
+    return {'_fee_only': True, 'qty': int(qty), 'ticker': ticker.upper(), 'price': float(price)}
 
 
 def parse_futures_section_rows(rows: list[list[str]], import_tz: str = IMPORT_LOCAL_TZ) -> list[dict]:
@@ -690,7 +751,8 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
     for ex in executions_sorted:
         if ex['instrument_type'] == 'OPTION':
             k = (ex['ticker'], ex['instrument_type'],
-                 ex.get('option_expiry', ''), ex.get('option_strike', ''), ex.get('option_type', ''))
+                 ex.get('option_expiry', ''), ex.get('option_strike', ''), ex.get('option_type', ''),
+                 ex.get('option_strike2') or '')
         else:
             k = (ex['ticker'], ex['instrument_type'])
         by_ticker.setdefault(k, []).append(ex)
@@ -725,7 +787,8 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
                 key = trade_group_key(close_date, ticker, instr, seq,
                                       current_fills[0].get('option_expiry'),
                                       current_fills[0].get('option_strike'),
-                                      current_fills[0].get('option_type'))
+                                      current_fills[0].get('option_type'),
+                                      current_fills[0].get('option_strike2'))
                 groups[key] = list(current_fills)
                 group_meta[key] = _make_group_meta(close_date, ticker, instr, current_fills)
 
@@ -735,7 +798,8 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
             key = trade_group_key(last_date, ticker, instr, seq,
                                   current_fills[0].get('option_expiry'),
                                   current_fills[0].get('option_strike'),
-                                  current_fills[0].get('option_type'))
+                                  current_fills[0].get('option_type'),
+                                  current_fills[0].get('option_strike2'))
             groups[key] = list(current_fills)
             group_meta[key] = _make_group_meta(last_date, ticker, instr, current_fills)
 
@@ -899,8 +963,10 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: s
     trade_history_rows = find_trade_history_section(sections)
 
     all_executions = []
+    multileg_fees = []
     if cash_rows:
-        all_executions.extend(parse_cash_balance_section(cash_rows, import_tz=import_tz))
+        for ex in parse_cash_balance_section(cash_rows, import_tz=import_tz):
+            (multileg_fees if ex.get('_fee_only') else all_executions).append(ex)
     if futures_rows:
         all_executions.extend(parse_futures_section_rows(futures_rows, import_tz=import_tz))
 
@@ -915,6 +981,18 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: s
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
             cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
         for ex in parse_trade_history_section(trade_history_rows, import_tz=import_tz):
+            if ex.pop('_multileg', False):
+                net = ex.pop('_net_price', None)
+                if net is not None:
+                    for fee in multileg_fees:
+                        if (not fee.get('_used') and fee['iso_date'] == ex['iso_date']
+                                and fee['ticker'] == ex['ticker'] and fee['qty'] == ex['qty']
+                                and abs(fee['price'] - net) < 1e-9):
+                            ex['commission'] = fee['commission']
+                            fee['_used'] = True
+                            break
+                all_executions.append(ex)
+                continue
             if _cross_section_key(ex) in cb_exact_keys:
                 continue
             k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
