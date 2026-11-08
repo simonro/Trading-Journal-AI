@@ -105,6 +105,7 @@ jest.mock('./api', () => {
     weeklySummaryApi: withDefault({}),
     yearlyKpisApi: withDefault({ get: fn(() => ok({ months: [] })) }),
     updateApi: withDefault({ get: fn(() => ok({ current: '1.5.0', latest: null, available: false, checked: true })) }),
+    pointValuesApi: withDefault({ get: fn(() => ok({ option: 100, futures: { '/ES': 50, '/MES': 5 } })) }),
     libraryApi: withDefault({
       list: fn(() => ok(LIBRARY)),
       merge: fn(() => ok({ moved: 2, target: 'VWAP Cross', trades: 12 })),
@@ -561,4 +562,50 @@ test('no update notice when the installed version is current', async () => {
   render(<App />);
   await waitFor(() => expect(updateApi.get).toHaveBeenCalled());
   expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+});
+
+test('Day Review loads lifetime numbers again for a newly chosen account', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+  await screen.findByRole('button', { name: /Regenerate AI/ });
+  kpisApi.get.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Swing' }));
+  await waitFor(() => expect(kpisApi.get.mock.calls.some(([p]) => p.account_id === 2 && !p.date_from)).toBe(true));
+});
+
+test('Reports ignores a late answer for the account that is no longer selected', async () => {
+  const report = (n) => ({ data: {
+    has_data: true, trade_count: n, equity_curve: [], by_month: [],
+    summary: { net_pnl: 0, max_drawdown: 0, max_drawdown_date: '2026-09-02', trading_days: 1,
+      green_days: 0, red_days: 0, best_day: 0, worst_day: 0, avg_green_day: 0, avg_red_day: 0,
+      longest_win_streak: 0, longest_loss_streak: 0, avg_trades_per_day: n },
+  } });
+  let releaseFirst;
+  reportsApi.get.mockImplementation((params) => (params.account_id === 2
+    ? Promise.resolve(report(22))
+    : new Promise(resolve => { releaseFirst = () => resolve(report(11)); })));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Reports' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Swing' }));
+  expect(await screen.findByText(/22 trades across/)).toBeInTheDocument();
+  await act(async () => { releaseFirst(); });
+  expect(screen.getByText(/22 trades across/)).toBeInTheDocument();
+  expect(screen.queryByText(/11 trades across/)).not.toBeInTheDocument();
+});
+
+test('Day Review keeps a regenerated review when the first answer arrives late', async () => {
+  const { dailySummaryApi } = require('./api');
+  let releaseFirst;
+  dailySummaryApi.get.mockImplementation((params) => (params.force
+    ? Promise.resolve({ data: { strengths: ['Fresh review'] } })
+    : new Promise(resolve => { releaseFirst = () => resolve({ data: { strengths: ['Stale review'] } }); })));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+  fireEvent.click(await screen.findByRole('button', { name: /Regenerate AI/ }));
+  expect(await screen.findByText('Fresh review')).toBeInTheDocument();
+  await act(async () => { releaseFirst(); });
+  expect(screen.getByText('Fresh review')).toBeInTheDocument();
+  expect(screen.queryByText('Stale review')).not.toBeInTheDocument();
 });

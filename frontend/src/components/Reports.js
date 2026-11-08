@@ -257,6 +257,7 @@ export default function Reports({ accountId, onOpenDetail, initial }) {
   const [leaks, setLeaks] = useState(null);
 
   useEffect(() => {
+    let live = true;
     setLoading(true);
     const params = {};
     if (accountId != null) params.account_id = accountId;
@@ -266,10 +267,12 @@ export default function Reports({ accountId, onOpenDetail, initial }) {
       reportsApi.get(params).then(r => r.data).catch(() => null),
       edgeReportApi.get(params).then(r => r.data).catch(() => null),
     ]).then(([rep, edg]) => {
+      if (!live) return;  // the user picked another account or range meanwhile
       setData(rep && rep.has_data ? rep : null);
       setEdge(edg);
       setLoading(false);
     });
+    return () => { live = false; };
   }, [accountId, dateFrom, dateTo]);
 
   // Leaks load only when their tab is open, and again whenever the filters change.

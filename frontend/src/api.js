@@ -140,6 +140,10 @@ export const yearlyKpisApi = {
 };
 
 // Newer release on GitHub? Answered by the backend's once-a-day startup check.
+export const pointValuesApi = {
+  get: () => api.get('/api/point-values'),
+};
+
 export const updateApi = {
   get: () => api.get('/api/update'),
 };

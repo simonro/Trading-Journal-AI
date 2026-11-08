@@ -46,3 +46,23 @@ test('an open trade has no hold time', () => {
   expect(s.holdMinutes).toBeNull();
   expect(s.fmtHold(s.holdMinutes)).toBe('—');
 });
+
+test('an option trade counts 100 shares per contract in ROI', () => {
+  const s = computeStats({ side: 'LONG', instrument_type: 'OPTION', net_pnl: 100, gross_pnl: 100,
+    executions: JSON.stringify([fill('BOT', '2026-09-14', '09:35:00', 1, 2), fill('SOLD', '2026-09-14', '10:00:00', 1, 3)]) });
+  expect(s.multiplier).toBe(100);
+  expect(s.netRoi).toBeCloseTo(50);
+});
+
+test('a closed future uses the point value it was booked with', () => {
+  const s = computeStats({ side: 'SHORT', instrument_type: 'FUTURE', ticker: '/ESZ26', net_pnl: 100, gross_pnl: 100,
+    executions: JSON.stringify([fill('SOLD', '2026-09-14', '09:35:00', 1, 6002), fill('BOT', '2026-09-14', '10:00:00', 1, 6000)]) });
+  expect(s.multiplier).toBeCloseTo(50);
+});
+
+test('a stock keeps a multiplier of 1', () => {
+  const s = computeStats({ side: 'LONG', net_pnl: 10, gross_pnl: 10,
+    executions: JSON.stringify([fill('BOT', '2026-09-14', '09:35:00', 10, 20), fill('SOLD', '2026-09-14', '10:00:00', 10, 21)]) });
+  expect(s.multiplier).toBe(1);
+  expect(s.netRoi).toBeCloseTo(5);
+});
