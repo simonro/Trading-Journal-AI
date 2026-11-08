@@ -318,16 +318,11 @@ def delete_account(account_id: int, conn: sqlite3.Connection = Depends(get_conne
         dst.close()
 
     try:
-        groups = [r[0] for r in conn.execute(
-            "SELECT DISTINCT trade_group FROM trades WHERE account_id=?", (account_id,))]
         trades = conn.execute("DELETE FROM trades WHERE account_id=?", (account_id,)).rowcount
-        # Notes and tags are keyed by trade_group alone. Keep the ones another
-        # account still has a trade for.
-        notes = 0
-        if groups:
-            orphan = f"trade_group IN ({in_marks(groups)}) AND trade_group NOT IN (SELECT trade_group FROM trades)"
-            notes = conn.execute(f"DELETE FROM trade_analysis WHERE {orphan}", groups).rowcount
-            conn.execute(f"DELETE FROM trade_tags WHERE {orphan}", groups)
+        # Notes and tags are keyed by (trade_group, account_id): another account's
+        # trade with the same name keeps its own.
+        notes = conn.execute("DELETE FROM trade_analysis WHERE account_id=?", (account_id,)).rowcount
+        conn.execute("DELETE FROM trade_tags WHERE account_id=?", (account_id,))
         conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id IN "
                      "(SELECT id FROM diary_entries WHERE account_id=?)", (account_id,))
         diary = conn.execute("DELETE FROM diary_entries WHERE account_id=?", (account_id,)).rowcount
@@ -523,10 +518,13 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
     for g in old_groups - new_keys:
         conn.execute("DELETE FROM trades WHERE trade_group=? AND account_id=?", (g, account_id))
     for g, target in moves.items():
-        has_own = conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=?", (target,)).fetchone()
+        has_own = conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=? AND account_id=?",
+                               (target, account_id)).fetchone()
         if not has_own:
-            conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=?", (target, g))
-            conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=?", (target, g))
+            conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=? AND account_id=?",
+                         (target, g, account_id))
+            conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=? AND account_id=?",
+                         (target, g, account_id))
 
 
 @app.post("/api/import-csv")
@@ -657,7 +655,7 @@ def list_trades(
         SELECT t.*, ta.strategy, ta.stop_loss, ta.r_multiple, ta.match_confidence, ta.emotional_state,
                ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.mistakes, ta.notes as analysis_notes
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params = []
@@ -749,11 +747,12 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
 
     if data.strategy or data.stop_loss or data.notes:
         conn.execute("""
-            INSERT INTO trade_analysis (trade_group, ticker, date, strategy, stop_loss, notes)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(trade_group) DO UPDATE SET
+            INSERT INTO trade_analysis (trade_group, account_id, ticker, date, strategy, stop_loss, notes)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(trade_group, account_id) DO UPDATE SET
                 strategy=excluded.strategy, stop_loss=excluded.stop_loss, notes=excluded.notes
-        """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
+        """, (trade_group, data.account_id, data.ticker.upper(), data.date, data.strategy,
+              data.stop_loss, data.notes))
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (cursor.lastrowid,)).fetchone()
@@ -889,24 +888,43 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
         raise HTTPException(status_code=404, detail="Trade not found")
 
     trade = row_to_dict(row)
-    trade_group = trade['trade_group']
+    key = (trade['trade_group'], trade['account_id'])
 
-    conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
-    conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
+    conn.execute("DELETE FROM trade_tags WHERE trade_group=? AND account_id=?", key)
+    conn.execute("DELETE FROM trade_analysis WHERE trade_group=? AND account_id=?", key)
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
     conn.commit()
 
     return {"deleted": True, "id": trade_id}
 
 
+def _trade_for_group(conn, trade_group: str, account_id: int | None):
+    """The trade a review endpoint is about. trade_group names are not unique across
+    accounts, so callers pass account_id; without it the name must belong to one account."""
+    if account_id is not None:
+        return conn.execute("SELECT trade_group, account_id, ticker, date FROM trades "
+                            "WHERE trade_group=? AND account_id=?", (trade_group, account_id)).fetchone()
+    rows = conn.execute("SELECT trade_group, account_id, ticker, date FROM trades WHERE trade_group=?",
+                        (trade_group,)).fetchall()
+    if len(rows) > 1:
+        raise HTTPException(status_code=409,
+                            detail="This trade name exists in several accounts. Pass account_id.")
+    return rows[0] if rows else None
+
+
 @app.get("/api/trades/{trade_group:path}/analysis")
-def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_connection)):
+def get_trade_analysis(trade_group: str, account_id: int | None = Query(None),
+                       conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
+    if not trade:
+        return {"analysis": None, "tags": []}
+    key = (trade["trade_group"], trade["account_id"])
     analysis = conn.execute(
-        "SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)
+        "SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?", key
     ).fetchone()
 
     tags = conn.execute(
-        "SELECT * FROM trade_tags WHERE trade_group=?", (trade_group,)
+        "SELECT * FROM trade_tags WHERE trade_group=? AND account_id=?", key
     ).fetchall()
 
     return {
@@ -928,29 +946,31 @@ class AnalysisUpdate(BaseModel):
 
 
 @app.patch("/api/trades/{trade_group:path}/analysis")
-def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group, ticker, date FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+def update_trade_analysis(trade_group: str, data: AnalysisUpdate, account_id: int | None = Query(None),
+                          conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
+    key = (trade["trade_group"], trade["account_id"])
 
     updates = data.model_dump(exclude_unset=True)
 
-    existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
+    existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=? AND account_id=?", key).fetchone()
     if not existing:
         conn.execute(
-            "INSERT INTO trade_analysis (trade_group, ticker, date) VALUES (?,?,?)",
-            (trade_group, trade["ticker"], trade["date"])
+            "INSERT INTO trade_analysis (trade_group, account_id, ticker, date) VALUES (?,?,?,?)",
+            key + (trade["ticker"], trade["date"])
         )
 
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(
-            f"UPDATE trade_analysis SET {set_clause} WHERE trade_group=?",
-            list(updates.values()) + [trade_group]
+            f"UPDATE trade_analysis SET {set_clause} WHERE trade_group=? AND account_id=?",
+            list(updates.values()) + list(key)
         )
 
     conn.commit()
-    row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
+    row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?", key).fetchone()
     return row_to_dict(row) if row else {}
 
 
@@ -960,13 +980,14 @@ class TagCreate(BaseModel):
 
 
 @app.post("/api/trades/{trade_group:path}/tags", status_code=201)
-def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+def add_trade_tag(trade_group: str, data: TagCreate, account_id: int | None = Query(None),
+                  conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
     cursor = conn.execute(
-        "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,'manual')",
-        (trade_group, data.tag_type, data.tag_value)
+        "INSERT INTO trade_tags (trade_group, account_id, tag_type, tag_value, source) VALUES (?,?,?,?,'manual')",
+        (trade["trade_group"], trade["account_id"], data.tag_type, data.tag_value)
     )
     conn.commit()
     row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (cursor.lastrowid,)).fetchone()
@@ -1154,7 +1175,7 @@ def get_kpis(
                    ta.r_multiple as r_multiple,
                    t.account_id as account_id
             FROM trades t
-            LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+            LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
             WHERE t.net_pnl IS NOT NULL AND t.net_pnl != 0
         ) sub
         WHERE label IS NOT NULL
@@ -1714,13 +1735,13 @@ def get_reports(
     from collections import OrderedDict
 
     sql = """
-        SELECT t.id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
+        SELECT t.id, t.account_id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
                t.instrument_type, t.executions, t.setup, t.setup_grade,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.idea_source
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
     """
     params: list = []
@@ -1821,16 +1842,16 @@ def get_reports(
     # A trade with several tags counts once under each of them.
     tags_by_group = {}
     for tr in conn.execute(
-        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
+        "SELECT DISTINCT account_id, trade_group, tag_type, tag_value FROM trade_tags "
         "WHERE tag_type NOT IN ('strategy', 'source') AND TRIM(tag_value) <> ''"
     ).fetchall():
-        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+        tags_by_group.setdefault((tr['account_id'], tr['trade_group']), []).append((tr['tag_type'], tr['tag_value']))
     by_tag = {}
     for tag_type in ('setup', 'execution', 'mistake', 'emotion', 'outcome'):
         rows_for_type = [
             dict(r, _tag=value)
             for r in raw
-            for (t, value) in tags_by_group.get(r['trade_group'], [])
+            for (t, value) in tags_by_group.get((r['account_id'], r['trade_group']), [])
             if t == tag_type
         ]
         if rows_for_type:
@@ -1895,7 +1916,7 @@ def _leak_rows(conn, account_id, date_from, date_to):
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.emotional_state, ta.idea_source
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params: list = []
@@ -1913,12 +1934,12 @@ def _leak_rows(conn, account_id, date_from, date_to):
 
     tags_by_group = {}
     for tr in conn.execute(
-        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
+        "SELECT DISTINCT account_id, trade_group, tag_type, tag_value FROM trade_tags "
         "WHERE tag_type IN ('mistake', 'emotion') AND TRIM(tag_value) <> ''"
     ).fetchall():
-        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+        tags_by_group.setdefault((tr['account_id'], tr['trade_group']), []).append((tr['tag_type'], tr['tag_value']))
     for r in rows:
-        r['tags'] = tags_by_group.get(r['trade_group'], [])
+        r['tags'] = tags_by_group.get((r['account_id'], r['trade_group']), [])
         # The playbook setup name the trader tagged ('NONE' reads as 'No setup'), as in by_setup.
         r['setup_label'] = _SETUP_LABEL_MAP.get(r['setup'], r['setup']) if r['setup'] else None
     # derive over every trade so breakeven and open ones still count in the sequence, then keep
@@ -2010,7 +2031,7 @@ def get_edge_report(
         SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
                ta.r_multiple, ta.emotional_state, ta.mistakes
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params: list = []
@@ -2032,7 +2053,7 @@ def get_edge_report(
     tag_sql = """
         SELECT tt.tag_value, COUNT(*) as cnt
         FROM trade_tags tt
-        JOIN trades t ON t.trade_group = tt.trade_group
+        JOIN trades t ON t.trade_group = tt.trade_group AND t.account_id = tt.account_id
         WHERE tt.tag_type = 'mistake'
     """
     tag_params: list = []
@@ -2282,7 +2303,7 @@ def get_weekly_summary(
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.entry_reason, ta.exit_reason
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.date >= ? AND t.date <= ?
     """
     params: list = [week_from, week_to]

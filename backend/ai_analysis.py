@@ -342,7 +342,11 @@ def save_analysis_to_db(conn, diary_entry_id: int, analysis: dict):
     """
     Persist trade_analysis rows and trade_tags from Claude's response.
     Uses INSERT OR REPLACE so re-uploading a diary updates existing analysis.
+    Rows belong to the diary entry's account: trade_group names repeat across accounts.
     """
+    account_id = conn.execute(
+        "SELECT account_id FROM diary_entries WHERE id = ?", (diary_entry_id,)
+    ).fetchone()[0]
     for ta in analysis.get('trade_analyses', []):
         trade_group = ta.get('trade_group')
         if not trade_group:
@@ -353,12 +357,12 @@ def save_analysis_to_db(conn, diary_entry_id: int, analysis: dict):
         # Upsert trade_analysis (includes target_price)
         conn.execute("""
             INSERT INTO trade_analysis
-                (trade_group, ticker, date, strategy, stop_loss, target_price,
+                (trade_group, account_id, ticker, date, strategy, stop_loss, target_price,
                  risk_per_trade, risk_reward, r_multiple, entry_reason, exit_reason,
                  mistakes, emotional_state, notes, ai_feedback,
                  match_confidence, match_notes, diary_entry_id, idea_source)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(trade_group) DO UPDATE SET
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(trade_group, account_id) DO UPDATE SET
                 strategy=excluded.strategy,
                 stop_loss=excluded.stop_loss,
                 target_price=excluded.target_price,
@@ -377,6 +381,7 @@ def save_analysis_to_db(conn, diary_entry_id: int, analysis: dict):
                 idea_source=excluded.idea_source
         """, (
             trade_group,
+            account_id,
             ta.get('ticker', ''),
             analysis.get('diary_date', ''),
             ta.get('strategy'),
@@ -399,14 +404,15 @@ def save_analysis_to_db(conn, diary_entry_id: int, analysis: dict):
 
         # Clear and reinsert tags for this trade_group (AI source only)
         conn.execute(
-            "DELETE FROM trade_tags WHERE trade_group = ? AND source = 'ai'",
-            (trade_group,)
+            "DELETE FROM trade_tags WHERE trade_group = ? AND account_id = ? AND source = 'ai'",
+            (trade_group, account_id)
         )
         for tag in ta.get('tags', []):
             if tag.get('type') and tag.get('value'):
                 conn.execute(
-                    "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,?)",
-                    (trade_group, tag['type'], tag['value'], 'ai')
+                    "INSERT INTO trade_tags (trade_group, account_id, tag_type, tag_value, source) "
+                    "VALUES (?,?,?,?,?)",
+                    (trade_group, account_id, tag['type'], tag['value'], 'ai')
                 )
 
     conn.commit()
@@ -535,7 +541,7 @@ def build_brain_context(conn, account_id) -> str:
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.stop_loss, ta.target_price
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE {f"t.account_id IN ({in_marks(ids)})" if ids else "1=1"}
         ORDER BY t.date DESC, t.id DESC
         LIMIT 300

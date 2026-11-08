@@ -50,7 +50,7 @@ def build_daily_context(conn, date: str, account_id) -> dict:
                ta.emotional_state, ta.entry_reason, ta.exit_reason,
                ta.ai_feedback, ta.idea_source, ta.match_confidence
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.date = ?
     """
     params = [date]

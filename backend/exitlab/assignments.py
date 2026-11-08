@@ -35,7 +35,9 @@ def journal_rows(conn, account_id):
     strategy = "NULL"
     if {"strategy", "trade_group"} <= analysis:
         order = " ORDER BY a.id DESC" if "id" in analysis else ""
-        strategy = f"(SELECT a.strategy FROM trade_analysis a WHERE a.trade_group=t.trade_group{order} LIMIT 1)"
+        same_account = " AND a.account_id=t.account_id" if "account_id" in analysis else ""
+        strategy = (f"(SELECT a.strategy FROM trade_analysis a WHERE a.trade_group=t.trade_group"
+                    f"{same_account}{order} LIMIT 1)")
     return conn.execute(f"SELECT t.*, {strategy} AS strategy FROM trades t "
                         "WHERE t.account_id=? ORDER BY t.date,t.id", (account_id,)).fetchall()
 

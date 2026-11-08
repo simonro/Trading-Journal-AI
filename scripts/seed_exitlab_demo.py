@@ -135,8 +135,8 @@ def seed(conn, days, symbols, fetch_missing=False):
                     row = conn.execute("SELECT * FROM trades WHERE id=?", (tid,)).fetchone()
                     trade = from_row(row)
                     bucket = serial % 10
-                    conn.execute("""INSERT INTO trade_analysis(trade_group,ticker,date,stop_loss,notes,match_confidence)
-                        VALUES(?,?,?,?,?,'manual')""", (group, symbol, day, stop if bucket != 9 else None, LABEL))
+                    conn.execute("""INSERT INTO trade_analysis(account_id,trade_group,ticker,date,stop_loss,notes,match_confidence)
+                        VALUES(?,?,?,?,?,?,'manual')""", (account_id, group, symbol, day, stop if bucket != 9 else None, LABEL))
                 added += 1
             print(f"Cached SIP {day} {symbol}: {len(bars)} bars", flush=True)
     return {"label": LABEL, "account_id": account_id, "added": added, "existing": existing, "skipped": skipped}

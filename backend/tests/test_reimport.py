@@ -70,8 +70,8 @@ def test_second_import_adds_to_the_day_instead_of_overwriting(client):
 
     # a statement taken mid-morning: the first TSLA trip and the CRWD entry only
     post(client, statement(ROWS[:4]))
-    conn.execute("INSERT INTO trade_analysis (trade_group, ticker, date, strategy) VALUES "
-                 "('9/15/26_TSLA_STOCK_1', 'TSLA', '2026-09-15', 'Morning note')")
+    conn.execute("INSERT INTO trade_analysis (trade_group, account_id, ticker, date, strategy) VALUES "
+                 "('9/15/26_TSLA_STOCK_1', 1, 'TSLA', '2026-09-15', 'Morning note')")
     conn.commit()
 
     # the full day's statement afterwards

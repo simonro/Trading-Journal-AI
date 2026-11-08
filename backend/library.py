@@ -80,7 +80,8 @@ def _usage(conn, kind, tag_type, name):
     if kind == "source":
         return conn.execute("SELECT COUNT(*) FROM trade_analysis WHERE idea_source = ?", (name,)).fetchone()[0]
     return conn.execute(
-        "SELECT COUNT(DISTINCT trade_group) FROM trade_tags WHERE tag_type = ? AND tag_value = ?",
+        "SELECT COUNT(*) FROM (SELECT DISTINCT trade_group, account_id FROM trade_tags "
+        "WHERE tag_type = ? AND tag_value = ?)",
         (tag_type, name),
     ).fetchone()[0]
 
@@ -113,7 +114,10 @@ def _rewrite_tags(conn, tag_type, old, new):
     conn.execute(
         """DELETE FROM trade_tags
            WHERE tag_type = ? AND tag_value = ?
-             AND trade_group IN (SELECT trade_group FROM trade_tags WHERE tag_type = ? AND tag_value = ?)""",
+             AND EXISTS (SELECT 1 FROM trade_tags n
+                         WHERE n.tag_type = ? AND n.tag_value = ?
+                           AND n.trade_group = trade_tags.trade_group
+                           AND n.account_id IS trade_tags.account_id)""",
         (tag_type, old, tag_type, new),
     )
     conn.execute("UPDATE trade_tags SET tag_value = ? WHERE tag_type = ? AND tag_value = ?", (new, tag_type, old))
@@ -214,8 +218,10 @@ def list_library(conn: sqlite3.Connection = Depends(get_connection)):
         add("source", "", r["name"], r["n"])
     placeholders = ",".join("?" * len(TAG_TYPES))
     for r in conn.execute(
-        f"""SELECT tag_type, tag_value AS name, COUNT(DISTINCT trade_group) AS n FROM trade_tags
-            WHERE tag_type IN ({placeholders}) AND TRIM(tag_value) <> '' GROUP BY tag_type, tag_value""",
+        f"""SELECT tag_type, name, COUNT(*) AS n FROM (
+                SELECT DISTINCT tag_type, tag_value AS name, trade_group, account_id FROM trade_tags
+                WHERE tag_type IN ({placeholders}) AND TRIM(tag_value) <> '')
+            GROUP BY tag_type, name""",
         TAG_TYPES,
     ):
         add("tag", r["tag_type"], r["name"], r["n"])

@@ -395,24 +395,24 @@ def write_db(trades, diary):
                               else t["entry"] + t["stop_dist"])
             conn.execute("""
                 INSERT INTO trade_analysis
-                    (trade_group, ticker, date, strategy, stop_loss, risk_per_trade,
+                    (account_id, trade_group, ticker, date, strategy, stop_loss, risk_per_trade,
                      risk_reward, r_multiple, entry_reason, exit_reason, mistakes,
                      emotional_state, idea_source, match_confidence)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (t["trade_group"], t["ticker"], t["date"], t["setup"], stop_loss,
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (t["account_id"], t["trade_group"], t["ticker"], t["date"], t["setup"], stop_loss,
                   t["risk"], round(rng.uniform(1.5, 3.0), 1), t["r"],
                   rng.choice(ENTRY_REASONS), rng.choice(EXIT_REASONS), mistake,
                   emo, rng.choice(IDEA_SOURCES), "manual"))
 
             if mistake:
                 conn.execute(
-                    "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) "
-                    "VALUES (?,?,?,?)",
-                    (t["trade_group"], "mistake", mistake, "manual"))
+                    "INSERT INTO trade_tags (account_id, trade_group, tag_type, tag_value, source) "
+                    "VALUES (?,?,?,?,?)",
+                    (t["account_id"], t["trade_group"], "mistake", mistake, "manual"))
             conn.execute(
-                "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) "
-                "VALUES (?,?,?,?)",
-                (t["trade_group"], "strategy", t["setup"], "manual"))
+                "INSERT INTO trade_tags (account_id, trade_group, tag_type, tag_value, source) "
+                "VALUES (?,?,?,?,?)",
+                (t["account_id"], t["trade_group"], "strategy", t["setup"], "manual"))
 
     for account_id, d, text, analysis in diary:
         conn.execute(
