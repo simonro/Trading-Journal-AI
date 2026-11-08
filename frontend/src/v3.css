@@ -433,6 +433,23 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   transform: translate(-50%, -50%) scale(1.7);
   box-shadow: 0 0 0 4px var(--accent-soft); outline: none;
 }
+/* the session's extremes: a stat row above the curve, level lines on it */
+.v3-daystats {
+  display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 4px;
+  font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+}
+.v3-daystats b { font-weight: 600; color: var(--text-primary); margin-left: 6px; }
+.v3-daystats i { font-style: normal; margin-left: 6px; color: var(--text-tertiary); }
+.v3-daylevel, .v3-dayclose {
+  position: absolute; pointer-events: none; font-size: 11px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  background: var(--surface-panel); padding: 0 5px; border-radius: 3px;
+}
+.v3-daylevel { left: 4px; }
+.v3-daylevel.hi { transform: translateY(3px); }
+.v3-daylevel.lo { transform: translateY(calc(-100% - 3px)); }
+.v3-daylevel i { font-style: normal; font-weight: 400; color: var(--text-tertiary); margin-left: 3px; }
+.v3-dayclose { right: 0; transform: translateY(calc(-100% - 4px)); }
 .v3-daygrade {
   font-family: var(--font-display); font-weight: 700; font-size: 21px; line-height: 1;
   color: var(--text-primary); border: 1px solid var(--divider);
