@@ -1738,7 +1738,8 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, *,
                 "Could not recognise this CSV. Pick the broker from the dropdown. "
                 "Supported exports: Thinkorswim account statement, Interactive Brokers "
                 "Activity Statement, Tradovate Orders, NinjaTrader Executions, TopstepX "
-                "trades, Webull order history. Otherwise copy your fills into the "
+                "trades, Webull order history, tastytrade transactions, TradeStation activity, "
+                "Power E*TRADE orders. Otherwise copy your fills into the "
                 "generic template (Import page, 'Broker not listed?')."
             )
         key = detected

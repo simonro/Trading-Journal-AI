@@ -1,11 +1,11 @@
 """Readers for broker exports beyond Thinkorswim, IBKR and the generic template:
-Tradovate, NinjaTrader, TopstepX and Webull.
+Tradovate, NinjaTrader, TopstepX, Webull, tastytrade, TradeStation and Power E*TRADE.
 
 Each reader turns the export's fill rows into the common execution shape (see
 csv_parser.parse_generic_rows) and hands them to build_trades_from_executions, so
 grouping, duplicate checks and P&L work exactly as for the other brokers.
 
-Header names, row filters and side labels follow LuxAlgo's trade-journal importers
+Tradovate, NinjaTrader, TopstepX and Webull header names, row filters and side labels follow LuxAlgo's trade-journal importers
 (packages/importers, MIT License, Copyright (c) 2026 LuxAlgo Global, LLC;
 https://github.com/LuxAlgo/trade-journal), which were cross-checked against parsers
 that read real exports. This is a Python rewrite, not a copy; the license notice is
@@ -17,6 +17,7 @@ import csv
 import io
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -69,6 +70,10 @@ class Spec:
     # A row is a fill only when these columns have a value (TopstepX lists cancelled
     # orders with their size, so the size alone does not mean anything was filled).
     filled_marker: list[str] = field(default_factory=list)
+    # Turns one export row into a canonical row (keys below), None for a row that is not
+    # a fill (cash movements, cancelled orders), or a short reason string for a row that
+    # is a trade the journal cannot book yet (counted and named in a warning).
+    prepare: Callable[[dict], dict | str | None] | None = None
 
 
 SPECS = [
@@ -111,16 +116,168 @@ SPECS = [
         fees=[['commission', 'commissions'], ['fee', 'fees']],
     ),
 ]
+
+# Readers with a prepare() step read these canonical keys.
+_CANON = dict(symbol=['_symbol'], side=['_side'], quantity=['_qty'], price=['_price'],
+              timestamp=['_time'], fees=[['_fee']])
+
+
+_TASTY_DELIVERY_ACTIONS = {'BUY_TO_OPEN', 'SELL_TO_CLOSE', 'SELL_TO_OPEN', 'BUY_TO_CLOSE'}
+_FUTURES_LIKE = re.compile(r'^/|^[A-Z0-9]{1,4}[FGHJKMNQUVXZ]\d{1,2}$')
+
+
+def _tasty_prepare(rec: dict):
+    kind = rec.get('type', '')
+    if kind not in ('Trade', 'Receive Deliver'):
+        return None                                   # Money Movement: cash, not a trade
+    sub = rec.get('subtype', '')
+    instrument = rec.get('instrumenttype', '')
+    action = rec.get('action', '').replace('_', ' ')
+    qty = rec.get('quantity', '')
+    zero_price = False
+    if kind == 'Receive Deliver':
+        if sub == 'Expiration':
+            zero_price = True                         # option removed at expiry, worth 0
+        elif sub in ('Assignment', 'Exercise') and instrument == 'Equity Option':
+            # The option leaves at 0; the shares come in on their own Receive Deliver row.
+            action = 'BUY TO CLOSE' if sub == 'Assignment' else 'SELL TO CLOSE'
+            zero_price = True
+        elif (instrument == 'Equity' and sub.upper().replace(' ', '_') in _TASTY_DELIVERY_ACTIONS
+              and _number(rec.get('value', ''))):
+            pass                                      # the shares of an assignment or exercise
+        else:
+            # Corporate actions (special dividends, splits, symbol changes), transfers and
+            # cash settlements carry no trade price: nothing to book as a fill.
+            return f"tastytrade {sub or 'Receive Deliver'}"
+    if instrument not in ('Equity', 'Equity Option'):
+        return f"tastytrade {instrument or 'unknown'}"
+    option = instrument == 'Equity Option'
+    try:
+        mult = float(rec.get('multiplier') or (100 if option else 1))
+    except ValueError:
+        mult = 100.0 if option else 1.0
+    if zero_price:
+        price = '0'
+    else:
+        # Value is exact; Average Price is rounded to the cent (100 AES sold for $994.10
+        # shows 9.94). Value also carries the option multiplier.
+        value, n = _number(rec.get('value', '')), _number(qty)
+        avg = _number(rec.get('averageprice', ''))
+        if value and n:
+            price = repr(abs(value) / abs(n) / (mult if option else 1))
+        else:
+            price = '' if avg is None else repr(abs(avg) / (mult if option else 1))
+    row = {'_symbol': rec.get('symbol', ''), '_side': action, '_qty': qty, '_price': price,
+           '_time': rec.get('date', ''), '_fee': _fee_sum(rec.get('commissions', ''), rec.get('fees', '')),
+           '_zero_ok': zero_price}
+    if instrument == 'Equity Option':
+        row['_option'] = _option_from_columns(rec.get('underlyingsymbol') or rec.get('rootsymbol', ''),
+                                              rec.get('expirationdate', ''), rec.get('strikeprice', ''),
+                                              rec.get('callorput', ''))
+    return row
+
+
+def _tradestation_prepare(rec: dict):
+    side = rec.get('transaction', '')
+    if not re.match(r'^(buy|sell)', side.strip().lower()):
+        # Expired, Assigned, Exercised and other activity: counted and named, so an
+        # option that expired is not left open without a word.
+        return f"TradeStation {side.strip() or 'blank'}"
+    if _FUTURES_LIKE.match(rec.get('symbol', '').strip().upper()):
+        return "TradeStation futures"
+    row = {'_symbol': rec.get('symbol', '').strip(), '_side': side, '_qty': rec.get('quantity', ''),
+           '_price': rec.get('price', ''), '_fee': rec.get('commission', ''),
+           # "02/02/2026 08:11:32:000": milliseconds after a colon
+           '_time': re.sub(r'(\d{2}:\d{2}:\d{2}):(\d{1,3})$', r'\1.\2', rec.get('activitytime', '').strip()),
+           '_account': rec.get('accountnumber', '')}
+    if rec.get('callput', '').strip():
+        qty, price = _number(rec.get('quantity', '')), _number(rec.get('price', ''))
+        amount, fee = _number(rec.get('amount', '')), _number(rec.get('commission', '')) or 0
+        if not qty or not price:
+            return f"TradeStation option with quantity {rec.get('quantity', '')}"
+        qty = abs(qty)
+        # Option quantity is in shares in the activity file (200 = 2 contracts). The
+        # Amount column (price x shares, give or take the commission) tells which.
+        def near(x):
+            return amount is not None and abs(abs(amount) - x) <= abs(fee) + 0.01 * x + 0.01
+        if near(price * qty) and qty % 100 == 0:
+            contracts = qty // 100
+        elif near(price * qty * 100):
+            contracts = qty
+        else:
+            return "TradeStation option whose quantity does not match its amount"
+        row['_qty'] = str(int(contracts))
+        row['_option'] = _option_from_columns(rec.get('underlyingsymbol', ''), rec.get('expiredate', ''),
+                                              rec.get('strikeprice', ''), rec.get('callput', ''))
+    return row
+
+
+_ETRADE_DESC = re.compile(r'^(Buy to Cover|Sell Short|Buy|Sell)\s+[\d,.]+\s+(.*?)\s+@', re.I)
+_ETRADE_OPTION = re.compile(r'^([A-Z][a-z]{2})-(\d{1,2})-(\d{2})\s+([\d.]+)\s+(Call|Put)s?$', re.I)
+
+
+def _etrade_prepare(rec: dict):
+    fill = rec.get('fill', '')
+    m = re.match(r'^\s*([\d,.]+)\s*@\s*([\d,.]+)\s*$', fill)
+    if not m:
+        return None                                   # "--": nothing filled
+    d = _ETRADE_DESC.match(rec.get('description', '').strip())
+    if not d:
+        return "Power E*TRADE order with an unreadable description"
+    if _FUTURES_LIKE.match(rec.get('symbol', '').strip().upper()):
+        return "Power E*TRADE futures"
+    desc = rec.get('description', '').strip()
+    row = {'_symbol': rec.get('symbol', ''), '_side': d.group(1), '_qty': m.group(1), '_price': m.group(2),
+           '_time': rec.get('time', '').replace(',', ''), '_fee': '', '_account': rec.get('account', ''),
+           '_closing': bool(re.search(r'\bto Close\b|^Buy to Cover', desc, re.I))}
+    what = d.group(2).strip()
+    o = _ETRADE_OPTION.match(what)
+    if o:
+        mon, day, yy, strike, cp = o.groups()
+        month = MONTH_NUMBERS.get(mon.upper())
+        if not month:
+            return "Power E*TRADE option with an unreadable expiry"
+        row['_option'] = {'ticker': rec.get('symbol', '').strip().upper(),
+                          'option_expiry': f"{2000 + int(yy):04d}-{month:02d}-{int(day):02d}",
+                          'option_strike': float(strike),
+                          'option_type': 'CALL' if cp.lower() == 'call' else 'PUT'}
+    elif what.upper() != rec.get('symbol', '').strip().upper():
+        return "Power E*TRADE order that is not a stock or single option"
+    return row
+
+
+SPECS += [
+    Spec(key='tastytrade', label='tastytrade',
+         required=[['date'], ['type'], ['action'], ['instrumenttype'], ['averageprice'], ['multiplier']],
+         prepare=_tasty_prepare, **_CANON),
+    Spec(key='tradestation', label='TradeStation',
+         required=[['transaction'], ['activitytime'], ['callput'], ['commission']],
+         prepare=_tradestation_prepare, account=['_account'], **_CANON),
+    Spec(key='etrade', label='Power E*TRADE',
+         required=[['symbol'], ['status'], ['fill'], ['description'], ['time']],
+         prepare=_etrade_prepare, account=['_account'], **_CANON,
+         no_fees_warning="Power E*TRADE's Orders export has no commissions, so these trades are "
+                         "imported with $0 fees. Add fees on each trade if you want net P&L."),
+]
 SPEC_BY_KEY = {s.key: s for s in SPECS}
 LABELS = {s.key: s.label for s in SPECS}
 
 
 # ── Reading the CSV ───────────────────────────────────────────────────────────
 
-def _records(content: str) -> tuple[list[str], list[tuple[int, dict]]]:
-    """Header (normalized) and (line number, {normalized header: value}) per data row."""
+def _records(content: str, spec: 'Spec | None' = None) -> tuple[list[str], list[tuple[int, dict]]]:
+    """Header (normalized) and (line number, {normalized header: value}) per data row.
+    The header is the first of the opening rows that a reader recognises (Power E*TRADE
+    puts a title line above it), else the first non-empty row."""
     rows = list(csv.reader(io.StringIO(content.lstrip('\ufeff'))))
-    at = next((i for i, r in enumerate(rows) if any(c.strip() for c in r)), None)
+    at = None
+    for i, r in enumerate(rows[:15]):
+        cols = [_norm(h) for h in r]
+        if any(_header_matches(cols, s) for s in ([spec] if spec else SPECS)):
+            at = i
+            break
+    if at is None:
+        at = next((i for i, r in enumerate(rows) if any(c.strip() for c in r)), None)
     if at is None:
         return [], []
     header = [_norm(h) for h in rows[at]]
@@ -134,6 +291,33 @@ def _records(content: str) -> tuple[list[str], list[tuple[int, dict]]]:
                 rec[h] = cells[i].strip() if i < len(cells) else ''
         out.append((n, rec))
     return header, out
+
+
+MONTH_NUMBERS = {m: i for i, m in enumerate(
+    ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'], start=1)}
+
+
+def _fee_sum(*values: str) -> str:
+    total = 0.0
+    for v in values:
+        n = _number(v) if v and v.strip() not in ('--', '-') else 0.0
+        if n is None:
+            return v                                  # left unreadable on purpose: reported
+        total += abs(n)
+    return repr(total)
+
+
+def _option_from_columns(underlying: str, expiry: str, strike: str, call_put: str) -> dict | None:
+    """Option contract from separate columns: 'IWM', '2/20/26' or '02/20/2026', '225.0', 'PUT'."""
+    m = re.match(r'^\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$', expiry or '')
+    k = _number(strike or '')
+    cp = (call_put or '').strip().upper()
+    if not (underlying.strip() and m and k and cp in ('C', 'P', 'CALL', 'PUT')):
+        return None
+    mo, dd, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    year = yy if yy > 99 else 2000 + yy
+    return {'ticker': underlying.strip().upper(), 'option_expiry': f"{year:04d}-{mo:02d}-{dd:02d}",
+            'option_strike': k, 'option_type': 'CALL' if cp.startswith('C') else 'PUT'}
 
 
 def _pick(rec: dict, aliases: list[str]) -> str:
@@ -159,7 +343,7 @@ def detect(content: str) -> str | None:
 
 
 def missing_columns(content: str, key: str) -> list[str]:
-    header, _ = _records(content[:20000])
+    header, _ = _records(content[:20000], SPEC_BY_KEY[key])
     cols = set(header)
     return ['/'.join(g) for g in SPEC_BY_KEY[key].required if not any(a in cols for a in g)]
 
@@ -315,7 +499,25 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
         ZoneInfo(zone)
     except Exception:
         raise ValueError(f"Unknown timezone '{zone}'.")
-    header, records = _records(content)
+    header, records = _records(content, spec)
+
+    skipped_kinds: dict[str, int] = {}
+    if spec.prepare:
+        prepared = []
+        for n, rec in records:
+            out = spec.prepare(rec)
+            if out is None:
+                continue
+            if isinstance(out, str):
+                skipped_kinds[out] = skipped_kinds.get(out, 0) + 1
+                continue
+            prepared.append((n, out))
+        records = prepared
+        if skipped_kinds and warnings is not None:
+            warnings.append("Not imported: " + ", ".join(f"{v} {k} row(s)" for k, v in sorted(skipped_kinds.items()))
+                            + ". These rows carry no fill this reader can book (corporate actions, transfers, "
+                              "cash settlements, expirations reported without a fill, futures). A position they "
+                              "touch may stay open; adjust it by hand.")
 
     # Rows with something filled. A partly filled order that was then cancelled still
     # filled shares, so the filled quantity decides, not the status.
@@ -377,7 +579,7 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
             why.append(f"side '{_pick(rec, spec.side)}' is not buy or sell")
         if qty is None or qty == 0:
             why.append(f"quantity '{qty_text}' is not a number above zero")
-        if price is None or price <= 0:
+        if price is None or price < 0 or (price == 0 and not rec.get('_zero_ok')):
             why.append(f"price '{price_text}' is not a number above zero")
         if when is None:
             why.append(f"time '{_pick(rec, spec.timestamp)}' could not be read")
@@ -393,7 +595,13 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
                     fees += abs(f)
 
         instr, ticker, mult, option = 'STOCK', raw_symbol.strip().upper(), 1, None
-        if raw_symbol and when:
+        if '_option' in rec:
+            option = rec['_option']
+            if not option:
+                why.append(f"option '{raw_symbol}' has no readable expiry, strike or call/put")
+            else:
+                instr, ticker, mult = 'OPTION', option['ticker'], 100
+        elif raw_symbol and when:
             if spec.futures_only:
                 ticker = futures_ticker(raw_symbol, when.year)
                 if not ticker:
@@ -422,14 +630,17 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
         qty = int(qty) if qty == int(qty) else round(qty, 6)
         parsed.append({'order': order, 'when': when, 'action': action, 'qty': qty, 'ticker': ticker,
                        'price': price, 'instr': instr, 'mult': mult, 'option': option,
-                       'commission': fees})
+                       'commission': fees,
+                       # "Sell to Close", "Buy to Cover": the broker says this fill closes
+                       'closing': bool(rec.get('_closing')
+                                       or re.search(r'\b(close|cover)\b', _pick(rec, spec.side), re.I))})
 
     if problems:
         more = f" (and {len(problems) - 8} more)" if len(problems) > 8 else ""
         raise ValueError(f"{len(problems)} row(s) could not be read, so nothing was imported{more}. "
                          + " | ".join(problems[:8]))
     if not parsed:
-        if crypto:
+        if crypto or skipped_kinds:
             return []
         raise ValueError(f"This {spec.label} file has no filled orders to import.")
 
@@ -444,7 +655,26 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
     if warnings is not None and spec.no_fees_warning and not any(p['commission'] for p in parsed):
         warnings.append(spec.no_fees_warning)
 
-    return _split_reversals([_execution(p) for p in parsed], open_positions or {})
+    executions = [_execution(p) for p in parsed]
+    if warnings is not None:
+        # A fill the broker marks as closing, with no open position in the journal or
+        # earlier in the file, closes something opened before the file's date range. It
+        # would show as an open trade the other way round.
+        position = dict(open_positions or {})
+        orphans = set()
+        for p, ex in zip(parsed, executions):
+            k = position_key(ex)
+            if p['closing'] and abs(position.get(k, 0)) < 1e-9:
+                orphans.add(ex['ticker'])
+            position[k] = position.get(k, 0) + (ex['qty'] if ex['action'] == 'BOT' else -ex['qty'])
+        if orphans:
+            names = sorted(orphans)
+            warnings.append(
+                f"{len(names)} symbol(s) have closing fills for positions opened before this file's "
+                f"dates ({', '.join(names[:10])}{'...' if len(names) > 10 else ''}). They show as open "
+                "trades; import an earlier file that covers the opening to fix them.")
+
+    return _split_reversals(executions, open_positions or {})
 
 
 def _execution(p: dict) -> dict:

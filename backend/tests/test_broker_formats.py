@@ -352,3 +352,135 @@ def test_zone_is_saved_only_for_exports_that_use_it(client):
     assert post(client, tradovate_day(), broker="tradovate", timezone="America/Chicago").status_code == 200
     r = post(client, tradovate_day(), broker="tradovate", timezone="America/New_York").json()
     assert any("changed from America/Chicago" in w for w in r["warnings"])
+
+
+# ── tastytrade, TradeStation, Power E*TRADE ──────────────────────────────────
+
+TASTY_HEAD = ("Date,Type,Sub Type,Action,Symbol,Instrument Type,Description,Value,Quantity,Average Price,"
+              "Commissions,Fees,Multiplier,Root Symbol,Underlying Symbol,Expiration Date,Strike Price,"
+              "Call or Put,Order #,Total,Currency\n")
+
+
+def test_tastytrade_wheel_expiration_assignment_and_cash_rows():
+    content = TASTY_HEAD + (
+        # newest first, as tastytrade exports
+        "2025-06-11T00:00:00+0000,Receive Deliver,Buy to Open,BUY_TO_OPEN,UNFI,Equity,Buy to Open 100 UNFI @ 29.00,"
+        "\"-2,900.00\",100,-29.00,--,-5.00,,,,,,,,\"-2,905.00\",USD\n"
+        "2025-06-11T00:00:00+0000,Receive Deliver,Assignment,,UNFI  250620P00029000,Equity Option,"
+        "Removal of option due to assignment,0.00,1,0.00,--,0.00,100,UNFI,UNFI,6/20/25,29.0,PUT,,0.00,USD\n"
+        "2025-06-06T20:00:00+0000,Receive Deliver,Expiration,BUY_TO_CLOSE,SPY   250606P00500000,Equity Option,"
+        "Removal of 1.0 SPY 06/06/25 Put 500.00 due to expiration.,0.00,1,0.00,--,0.00,100,SPY,SPY,6/6/25,500.0,PUT,,0.00,USD\n"
+        "2025-06-02T14:30:13+0000,Trade,Sell to Open,SELL_TO_OPEN,SPY   250606P00500000,Equity Option,"
+        "Sold 1 SPY 06/06/25 Put 500.00 @ 1.11,111.00,1,111.00,-1.00,-0.14,100,SPY,SPY,6/6/25,500,PUT,1,109.86,USD\n"
+        "2025-06-02T14:00:00+0000,Trade,Sell to Open,SELL_TO_OPEN,UNFI  250620P00029000,Equity Option,"
+        "Sold 1 UNFI 06/20/25 Put 29.00 @ 2.75,275.00,1,275.00,-1.00,-0.14,100,UNFI,UNFI,6/20/25,29,PUT,2,273.86,USD\n"
+        "2025-06-01T00:00:00+0000,Money Movement,Deposit,,,,ACH deposit,\"1,000.00\",0,,0.00,0.00,,,,,,,,\"1,000.00\",USD\n")
+    assert detect_broker(content) == "tastytrade"
+    warnings = []
+    trades, _ = parse_broker_csv(content, "auto", account_id=1, warnings=warnings)
+    by = {(t["ticker"], t["instrument_type"]): t for t in trades}
+    spy = by[("SPY", "OPTION")]
+    assert (spy["side"], spy["gross_pnl"], spy["commissions"]) == ("SHORT", 111.0, 1.14)
+    unfi_put = by[("UNFI", "OPTION")]
+    assert unfi_put["gross_pnl"] == 275.0 and unfi_put["option_strike"] == 29.0
+    shares = by[("UNFI", "STOCK")]
+    assert shares["side"] == "LONG" and shares["commissions"] == 5.0
+    assert json.loads(shares["executions"])[0]["price"] == 29.0
+    assert warnings == []
+
+
+def test_tastytrade_transfer_is_skipped_and_orphan_close_is_named():
+    content = TASTY_HEAD + (
+        "2025-01-24T00:00:00+0000,Receive Deliver,Transfer,SELL_TO_OPEN,NRXP,Equity,Transferred 10.0 Short NRXP,"
+        "0.00,10,0.00,--,0.00,,,,,,,,0.00,USD\n"
+        "2025-01-03T16:33:47+0000,Trade,Sell to Close,SELL_TO_CLOSE,BP    250417C00029000,Equity Option,"
+        "Sold 1 BP 04/17/25 Call 29.00 @ 1.00,100.00,1,100.00,0.00,-0.14,100,BP,BP,4/17/25,29,CALL,3,99.86,USD\n")
+    warnings = []
+    trades, _ = parse_broker_csv(content, "tastytrade", account_id=1, warnings=warnings)
+    assert len(trades) == 1
+    assert any("Transfer" in w for w in warnings)
+    assert any("BP" in w and "before this file" in w for w in warnings)
+
+
+def test_tradestation_stock_short_and_option_contracts():
+    head = ("Account Number,Type,TradeInd,Transaction,Quantity,Cusip,ADP,Symbol,CallPut,UnderlyingSymbol,"
+            "ExpireDate,StrikePrice,TD,SD,Activity Date,Price,Amount,CurrencyCode,Commission,Description,"
+            "Activity Time,Order ID\n")
+    content = head + (
+        '12345678,Margin,T,Sell Short,200,="0",,FUSE  ,,,,,02/02/2026,02/03/2026,02/02/2026,2.36,472.00,USD,1.08,FUSE INC,02/02/2026 09:22:03:000,1\n'
+        '12345678,Margin,T,Buy to Cover,200,="0",,FUSE  ,,,,,02/02/2026,02/03/2026,02/02/2026,2.41,482.00,USD,1.04,FUSE INC,02/02/2026 09:25:47:000,2\n'
+        '12345678,Margin,T,Buy,200,="TSLA260220C420202602",,TSLA260220C420,CALL,TSLA  ,02/20/2026,420.0000,02/18/2026,02/19/2026,02/18/2026,6.35,1271.30,USD,1.30,CALL TSLA,02/18/2026 09:47:12:000,3\n'
+        '12345678,Margin,T,Sell,200,="TSLA260220C420202602",,TSLA260220C420,CALL,TSLA  ,02/20/2026,420.0000,02/18/2026,02/19/2026,02/18/2026,7.9,1578.70,USD,1.30,CALL TSLA,02/18/2026 11:03:40:000,4\n')
+    assert detect_broker(content) == "tradestation"
+    trades, _ = parse_broker_csv(content, "auto", account_id=1)
+    by = {t["instrument_type"]: t for t in trades}
+    assert (by["STOCK"]["side"], by["STOCK"]["gross_pnl"], by["STOCK"]["commissions"]) == ("SHORT", -10.0, 2.12)
+    opt = by["OPTION"]
+    assert (opt["ticker"], opt["option_expiry"], opt["option_strike"], opt["option_type"]) == ("TSLA", "2026-02-20", 420.0, "CALL")
+    assert opt["gross_pnl"] == 310.0                                    # 1.55 x 2 contracts x 100
+    assert json.loads(opt["executions"])[0]["time"] == "09:47:12"
+
+
+def test_etrade_title_line_options_from_description_and_no_fees():
+    content = ('"Account 900000001 Orders, as of 02/02/26 at 04:00 PM EST"\n'
+               '"Symbol","Status","Fill","Description","Market","Time","Account","ID"\n'
+               '"IWM","Filled","3 @ 1.48","Sell 3 Feb-20-26 225 Puts @ 1.48 Limit to Open","SMART","02/18/2026, 10:12:05 AM","900000001","1"\n'
+               '"IWM","Filled","3 @ 0.62","Buy 3 Feb-20-26 225 Puts @ Market to Close","SMART","02/19/2026, 10:30:22 AM","900000001","2"\n'
+               '"AMD","Canceled","--","Buy 1 Feb-27-26 205 Calls @ 3.00 Limit to Open","SMART","02/19/2026, 1:10:00 PM","900000001","3"\n'
+               '"FUSE","Filled","200 @ 2.36","Sell Short 200 FUSE @ Market","SMART","02/02/2026, 9:22:03 AM","900000001","4"\n'
+               '"FUSE","Filled","200 @ 2.41","Buy to Cover 200 FUSE @ Market","SMART","02/02/2026, 9:25:47 AM","900000001","5"\n')
+    assert detect_broker(content) == "etrade"
+    warnings = []
+    trades, _ = parse_broker_csv(content, "auto", account_id=1, warnings=warnings)
+    by = {t["instrument_type"]: t for t in trades}
+    assert len(trades) == 2
+    assert (by["OPTION"]["side"], by["OPTION"]["gross_pnl"], by["OPTION"]["option_expiry"]) == ("SHORT", 258.0, "2026-02-20")
+    assert (by["STOCK"]["side"], by["STOCK"]["gross_pnl"]) == ("SHORT", -10.0)
+    assert any("no commissions" in w for w in warnings)
+
+
+TS_HEAD = ("Account Number,Type,TradeInd,Transaction,Quantity,Cusip,ADP,Symbol,CallPut,UnderlyingSymbol,"
+           "ExpireDate,StrikePrice,TD,SD,Activity Date,Price,Amount,CurrencyCode,Commission,Description,"
+           "Activity Time,Order ID\n")
+
+
+def test_tradestation_expired_rows_and_futures_are_named_not_dropped():
+    content = TS_HEAD + (
+        '1,Margin,T,Buy,200,="X",,TSLA260220C420,CALL,TSLA,02/20/2026,420,02/18/2026,02/19/2026,02/18/2026,6.35,1271.30,USD,1.30,CALL,02/18/2026 09:47:12:000,1\n'
+        '1,Margin,T,Expired,200,="X",,TSLA260220C420,CALL,TSLA,02/20/2026,420,02/20/2026,02/20/2026,02/20/2026,0,0,USD,0,CALL,02/20/2026 16:00:00:000,2\n'
+        '1,Margin,T,Buy,1,="0",,ESZ25,,,,,02/18/2026,02/19/2026,02/18/2026,6800,340000,USD,2.25,ES,02/18/2026 09:47:12:000,3\n')
+    warnings = []
+    trades, _ = parse_broker_csv(content, "tradestation", account_id=1, warnings=warnings)
+    assert [t["instrument_type"] for t in trades] == ["OPTION"]
+    assert any("TradeStation Expired" in w and "TradeStation futures" in w for w in warnings)
+
+
+def test_tradestation_option_quantity_in_contracts_is_detected_from_amount():
+    content = TS_HEAD + (
+        '1,Margin,T,Buy,100,="X",,SPY260220P600,PUT,SPY,02/20/2026,600,02/18/2026,02/19/2026,02/18/2026,6.35,63500.00,USD,65,P,02/18/2026 09:47:12:000,1\n'
+        '1,Margin,T,Sell,100,="X",,SPY260220P600,PUT,SPY,02/20/2026,600,02/18/2026,02/19/2026,02/18/2026,6.45,64500.00,USD,65,P,02/18/2026 10:47:12:000,2\n')
+    trades, _ = parse_broker_csv(content, "tradestation", account_id=1)
+    assert trades[0]["gross_pnl"] == 1000.0                         # 0.10 x 100 contracts x 100
+
+
+def test_tastytrade_uses_exact_value_and_skips_corporate_actions():
+    content = TASTY_HEAD + (
+        "2025-03-10T12:30:04+0000,Receive Deliver,Special Dividend,SELL_TO_OPEN,YOU   250516C00035730,Equity Option,"
+        "Special dividend: Open 1.0 YOU,350.00,1,350.00,--,0.00,100,YOU,YOU,5/16/25,35.73,CALL,,0.00,USD\n"
+        "2025-03-03T15:00:00+0000,Trade,Sell to Close,SELL_TO_CLOSE,AES,Equity,Sold 100 AES @ 9.94,994.10,100,9.94,0.00,-0.10,1,,,,,,9,993.99,USD\n"
+        "2025-03-03T14:00:00+0000,Trade,Buy to Open,BUY_TO_OPEN,AES,Equity,Bought 100 AES @ 9.90,-990.00,100,-9.90,0.00,0.00,1,,,,,,8,-990.00,USD\n")
+    warnings = []
+    trades, _ = parse_broker_csv(content, "tastytrade", account_id=1, warnings=warnings)
+    assert len(trades) == 1 and trades[0]["gross_pnl"] == 4.10
+    assert any("Special Dividend" in w for w in warnings)
+
+
+def test_etrade_futures_skipped_and_option_close_without_open_is_named():
+    content = ('"Symbol","Status","Fill","Description","Market","Time","Account","ID"\n'
+               '"/ESZ25","Filled","1 @ 6800","Buy 1 /ESZ25 @ Market","SMART","02/18/2026, 10:12:05 AM","9","1"\n'
+               '"IWM","Filled","3 @ 0.62","Sell 3 Feb-20-26 225 Puts @ Market to Close","SMART","02/19/2026, 10:30:22 AM","9","2"\n')
+    warnings = []
+    trades, _ = parse_broker_csv(content, "etrade", account_id=1, warnings=warnings)
+    assert [t["instrument_type"] for t in trades] == ["OPTION"]
+    assert any("Power E*TRADE futures" in w for w in warnings)
+    assert any("IWM" in w and "before this file" in w for w in warnings)
