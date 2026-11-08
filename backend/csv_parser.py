@@ -1700,17 +1700,32 @@ def detect_broker(content: str) -> str | None:
     return None
 
 
-def _open_position_sizes(conn, account_id: int) -> dict:
-    """Signed size of every position still open in the journal, keyed like
-    broker_formats.position_key, so a file that starts by closing one is read right."""
-    sizes = {}
-    for pos in load_open_positions_from_db(conn, account_id):
-        execs = pos['parsed_execs']
-        size = (sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
-                - sum(e.get('qty', 0) for e in execs if e.get('action') != 'BOT'))
-        key = (pos['ticker'], pos['instrument_type'], pos.get('option_expiry'),
-               pos.get('option_strike'), pos.get('option_type'))
-        sizes[key] = sizes.get(key, 0) + size
+def _position_sizes_before(conn, account_id: int):
+    """Signed size of each position just before a file's first fill for it, keyed like
+    broker_formats.position_key, so a file that starts by closing or flipping a position
+    is read right. Only stored fills earlier than the file count: a re-import of the
+    same file must not see its own fills as an open position."""
+    def sizes(first_fill: dict) -> dict:
+        out = {}
+        tickers = sorted({k[0] for k in first_fill})
+        if not tickers:
+            return out
+        rows = conn.execute(
+            f"SELECT ticker, instrument_type, option_expiry, option_strike, option_type, executions "
+            f"FROM trades WHERE account_id = ? AND ticker IN ({','.join('?' * len(tickers))})",
+            (account_id, *tickers)).fetchall()
+        for row in rows:
+            key = (row['ticker'], row['instrument_type'], row['option_expiry'],
+                   row['option_strike'], row['option_type'])
+            cutoff = first_fill.get(key)
+            if cutoff is None:
+                continue
+            for e in json.loads(row['executions'] or '[]'):
+                when = (e.get('iso_date') or normalize_date(e.get('date', '')), e.get('time') or '')
+                if when < cutoff:
+                    qty = e.get('qty', 0)
+                    out[key] = out.get(key, 0) + (qty if e.get('action') == 'BOT' else -qty)
+        return out
     return sizes
 
 
@@ -1759,7 +1774,7 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, *,
             )
         executions = broker_formats.parse_rows(
             content, key, timezone or broker_formats.DEFAULT_TIMEZONE, source_account, warnings,
-            open_positions=_open_position_sizes(conn, account_id) if conn else None)
+            open_positions=_position_sizes_before(conn, account_id) if conn else None)
         return build_trades_from_executions(executions, account_id, conn)
 
     if detected and detected != key:

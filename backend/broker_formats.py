@@ -489,9 +489,11 @@ def _futures_root(ticker: str) -> str:
 
 def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
                source_account: str | None = None, warnings: list | None = None,
-               open_positions: dict | None = None) -> list[dict]:
+               open_positions=None) -> list[dict]:
     """Fill rows of a known export -> execution dicts in time order. Raises ValueError
-    naming every bad row; rows that are not fills (nothing filled) are left out."""
+    naming every bad row; rows that are not fills (nothing filled) are left out.
+    open_positions: signed sizes by position_key at the start of the file, or a function
+    that takes {position_key: (date, time) of the file's first fill} and returns them."""
     from csv_parser import FUTURES_MULTIPLIERS, parse_ibkr_option_symbol
 
     spec = SPEC_BY_KEY[key]
@@ -656,6 +658,12 @@ def parse_rows(content: str, key: str, zone: str = DEFAULT_TIMEZONE,
         warnings.append(spec.no_fees_warning)
 
     executions = [_execution(p) for p in parsed]
+    if callable(open_positions):
+        # the journal's position for each symbol just before the file's first fill of it
+        first_fill = {}
+        for ex in executions:
+            first_fill.setdefault(position_key(ex), (ex['date'], ex['time']))
+        open_positions = open_positions(first_fill)
     if warnings is not None:
         # A fill the broker marks as closing, with no open position in the journal or
         # earlier in the file, closes something opened before the file's date range. It

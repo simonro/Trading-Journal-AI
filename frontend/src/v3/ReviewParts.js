@@ -77,7 +77,12 @@ export function DayCurve({ trades, onPick }) {
   if (!geom) return <div className="v3-empty">No timed executions on this day, so the session cannot be drawn.</div>;
 
   const peak = Math.max(1, ...marks.map((m) => Math.abs(m.pnl)));
-  const clock = (at) => (at == null ? '' : `${Math.floor(at)}:${String(Math.round((at % 1) * 60)).padStart(2, '0')}`);
+  // round to whole minutes first, so 9:59.6 reads 10:00 and never 9:60
+  const clock = (at) => {
+    if (at == null) return '';
+    const m = Math.round(at * 60);
+    return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+  };
   const { high, low, dd, close } = extremes;
   // a level line only earns its place when the day actually went there
   const levels = [

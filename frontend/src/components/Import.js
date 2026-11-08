@@ -372,6 +372,11 @@ export default function Import({ accounts, accountId }) {
               time, and this account remembers the choice so a later import matches the same fills.
             </div>
           )}
+          {(csvBroker === 'auto' || csvBroker === 'thinkorswim') && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+              Thinkorswim files use the timezone set in Settings &gt; General.
+            </div>
+          )}
 
           {sourceAccounts && (
             <div className="notice" role="status" style={{ marginTop: 12, display: 'block' }}>

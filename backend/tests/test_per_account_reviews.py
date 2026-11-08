@@ -240,7 +240,7 @@ def test_migration_backfills_account_id_from_trades(tmp_path, monkeypatch):
         conn.execute("INSERT INTO trades (account_id, trade_group, date, ticker, instrument_type, side) "
                      "VALUES (?,?,'2026-11-05','X','STOCK','LONG')", (acc, group))
     conn.execute("INSERT INTO diary_entries (id, account_id, entry_date) VALUES (7, 1, '2026-11-05')")
-    # 99 is a diary entry that was deleted: the live journal has one such dangling
+    # 99 is a diary entry that was deleted: a real journal can hold such a dangling
     # reference, and the migration must carry it over instead of failing.
     for i, group, diary in [(10, "solo_main", 7), (11, "solo_fut", 7), (12, SHARED, 7), (13, "orphan", 99)]:
         conn.execute("INSERT INTO trade_analysis (id, trade_group, ticker, date, notes, target_price, "

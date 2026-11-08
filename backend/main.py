@@ -335,6 +335,11 @@ def delete_account(account_id: int, conn: sqlite3.Connection = Depends(get_conne
                      "(SELECT id FROM diary_entries WHERE account_id=?)", (account_id,))
         diary = conn.execute("DELETE FROM diary_entries WHERE account_id=?", (account_id,)).rowcount
         conn.execute("DELETE FROM daily_summaries WHERE account_id=?", (account_id,))
+        # AI summaries cached for a set of accounts that included this one (see _summary_cache_key)
+        for sid, key in conn.execute("SELECT id, summary_date FROM daily_summaries "
+                                     "WHERE account_id IS NULL AND summary_date LIKE '%|accounts=%'").fetchall():
+            if str(account_id) in key.rsplit("|accounts=", 1)[1].split(","):
+                conn.execute("DELETE FROM daily_summaries WHERE id=?", (sid,))
         conn.execute("DELETE FROM settings WHERE account_id=?", (account_id,))
         conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         conn.commit()
@@ -579,6 +584,12 @@ async def import_csv(
     if save_zone and account['import_timezone']:
         warnings.append(f"The file timezone for this account changed from {account['import_timezone']} to "
                         f"{zone}. Fills imported earlier with the old zone are not matched as duplicates.")
+    # Thinkorswim reads its own timezone from Settings > General; say so when the Import page
+    # zone picked for this file was a different one, instead of ignoring it silently.
+    tos_zone = get_app_settings(conn)["import_timezone"]
+    if fmt == 'thinkorswim' and timezone.strip() and zone != tos_zone:
+        warnings.append(f"Thinkorswim times were read as {tos_zone}, the timezone in Settings > General. "
+                        f"The {zone} picked on the Import page applies only to the beta broker exports.")
 
     imported = 0
     errors = []

@@ -483,3 +483,20 @@ def test_etrade_futures_skipped_and_option_close_without_open_is_named():
     assert [t["instrument_type"] for t in trades] == ["OPTION"]
     assert any("Power E*TRADE futures" in w for w in warnings)
     assert any("IWM" in w and "before this file" in w for w in warnings)
+
+
+def test_reimporting_a_file_with_a_flip_changes_nothing(client):
+    """The flip (long 1, sell 2) is split from the position before the file, so the
+    second import must not read the file's own stored fills as an open position."""
+    f = ("orderId,Account,Date,Fill Time,B/S,Contract,Product,Filled Qty,Avg Fill Price,Status\n"
+         "1,A,11/5/26,11/05/2026 09:30:00,Buy,MESZ6,MES,1,7400.00,Filled\n"
+         "2,A,11/5/26,11/05/2026 09:40:00,Sell,MESZ6,MES,2,7410.00,Filled\n")
+    first = post(client, f, broker="tradovate").json()
+    conn = sqlite3.connect(client.db)
+    before = conn.execute("SELECT trade_group, side, gross_pnl, executions FROM trades ORDER BY id").fetchall()
+    second = post(client, f, broker="tradovate").json()
+    after = conn.execute("SELECT trade_group, side, gross_pnl, executions FROM trades ORDER BY id").fetchall()
+    assert first["imported"] == 2 and len(before) == 2
+    assert second["imported"] == 0
+    assert after == before
+    assert not any("opened before this file" in w for w in second.get("warnings", []))

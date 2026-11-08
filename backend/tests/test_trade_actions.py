@@ -145,3 +145,14 @@ def test_move_unlinks_the_old_accounts_diary_entry(client):
     assert client.patch(f"/api/trades/{client.trade}/account", json={"account_id": MAIN}).status_code == 200
     assert rows(client, "SELECT diary_entry_id, notes FROM trade_analysis WHERE trade_group=? AND account_id=?",
                 GROUP, MAIN) == [(None, "held the stop")]
+
+
+def test_deleting_an_account_drops_summaries_cached_for_sets_that_included_it(client):
+    conn = sqlite3.connect(client.db)
+    for key in ("2026-11-06|accounts=1,5", "2026-11-06|accounts=1,4", "2026-11-06"):
+        conn.execute("INSERT INTO daily_summaries (account_id, summary_date, ai_content) VALUES (NULL, ?, 'x')", (key,))
+    conn.commit()
+    conn.close()
+    assert client.delete(f"/api/accounts/{DEMO}").status_code == 200
+    assert sorted(k for (k,) in rows(client, "SELECT summary_date FROM daily_summaries")) == [
+        "2026-11-06", "2026-11-06|accounts=1,4"]
