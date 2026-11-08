@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { kpisApi, tradesApi, edgeReportApi, goalsApi } from '../api';
 import DateRangePicker from './DateRangePicker';
 import DashboardRender from '../v3/DashboardRender';
+import { selectionLabel, singleAccountId } from '../accountSelection';
 import {
   PageHeader, } from './ui';
 
@@ -62,7 +63,7 @@ function GoalsPanel({ draft, onChange, onSave, onCancel, accountLabel, saving, e
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ accountId, accounts = [], selectedAccountId, onDayClick, onOpenDetail, onViewAllTrades }) {
+export default function Dashboard({ accountId, accounts = [], selectedAccountIds = [], onDayClick, onOpenDetail, onViewAllTrades }) {
   const [kpis, setKpis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -110,11 +111,13 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       .catch(() => { if (current()) setEdgeReport(null); });
   }, [accountId, dateFrom, dateTo, reloadKey]);
 
+  // Goals are kept per account. Several accounts share the All Accounts goals.
+  const goalsAccountId = singleAccountId(selectedAccountIds);
   useEffect(() => {
     const params = {};
-    if (accountId != null) params.account_id = accountId;
+    if (goalsAccountId != null) params.account_id = goalsAccountId;
     goalsApi.get(params).then(r => setGoals(r.data)).catch(() => {});
-  }, [accountId]);
+  }, [goalsAccountId]);
 
   const openCloseModal = (pos) => {
     const execs = pos.executions || [];
@@ -171,7 +174,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
 
   const handleSaveGoals = () => {
     const payload = { ...goalsDraft };
-    if (accountId != null) payload.account_id = accountId;
+    if (goalsAccountId != null) payload.account_id = goalsAccountId;
     setGoalsSaving(true);
     setGoalsError(null);
     goalsApi.put(payload)
@@ -196,10 +199,8 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
       .catch(() => { if (current()) setRecentTrades([]); });
   }, [accountId, reloadKey]);
 
-  const accountLabel = (() => {
-    const a = accounts.find(x => x.id === selectedAccountId);
-    return a ? a.name : 'All Accounts';
-  })();
+  const accountLabel = selectionLabel(accounts, selectedAccountIds);
+  const goalsLabel = goalsAccountId == null ? 'All Accounts' : accountLabel;
 
   const { daily_pnl = [] } = kpis || {};
   const span = daily_pnl.length
@@ -253,7 +254,7 @@ export default function Dashboard({ accountId, accounts = [], selectedAccountId,
               onChange={setGoalsDraft}
               onSave={handleSaveGoals}
               onCancel={() => setShowGoals(false)}
-              accountLabel={accountLabel}
+              accountLabel={goalsLabel}
             />
           ) : null}
           RangePicker={(

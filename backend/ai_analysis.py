@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from dotenv import load_dotenv
+from database import in_marks
 
 load_dotenv()
 
@@ -526,17 +527,19 @@ If the data doesn't support a conclusion, say so — never fabricate numbers."""
 
 
 def build_brain_context(conn, account_id) -> str:
-    """Build a compact trading context string for Brain's system prompt."""
-    rows = conn.execute("""
+    """Build a compact trading context string for Brain's system prompt.
+    account_id is a list of account ids, or None for all accounts."""
+    ids = account_id or []
+    rows = conn.execute(f"""
         SELECT t.date, t.ticker, t.side, t.instrument_type, t.net_pnl, t.gross_pnl,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.stop_loss, ta.target_price
         FROM trades t
         LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
-        WHERE (? IS NULL OR t.account_id = ?)
+        WHERE {f"t.account_id IN ({in_marks(ids)})" if ids else "1=1"}
         ORDER BY t.date DESC, t.id DESC
         LIMIT 300
-    """, (account_id, account_id)).fetchall()
+    """, ids).fetchall()
 
     trades = [dict(r) for r in rows]
     if not trades:
@@ -587,11 +590,11 @@ def build_brain_context(conn, account_id) -> str:
         trade_lines.append(line)
 
     # Diary summaries
-    diary_rows = conn.execute("""
+    diary_rows = conn.execute(f"""
         SELECT entry_date, ai_analysis FROM diary_entries
-        WHERE (? IS NULL OR account_id = ?) AND ai_analysis IS NOT NULL
+        WHERE {f"account_id IN ({in_marks(ids)})" if ids else "1=1"} AND ai_analysis IS NOT NULL
         ORDER BY entry_date DESC LIMIT 10
-    """, (account_id, account_id)).fetchall()
+    """, ids).fetchall()
 
     diary_lines = []
     for d in diary_rows:

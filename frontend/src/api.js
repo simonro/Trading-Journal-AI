@@ -26,6 +26,8 @@ export const accountsApi = {
   list: () => api.get('/api/accounts'),
   create: (data) => api.post('/api/accounts', data),
   update: (id, data) => api.put(`/api/accounts/${id}`, data),
+  usage: (id) => api.get(`/api/accounts/${id}/usage`),
+  remove: (id) => api.delete(`/api/accounts/${id}`),
 };
 
 export const tradesApi = {

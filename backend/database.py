@@ -164,3 +164,8 @@ def init_db():
 
 def row_to_dict(row: sqlite3.Row) -> dict:
     return dict(row)
+
+
+def in_marks(ids) -> str:
+    """Placeholders for an IN (...) filter over a list of account ids."""
+    return ",".join("?" * len(ids))

@@ -345,6 +345,40 @@ summary:focus-visible {
   color: var(--text-tertiary);
 }
 .acct-menu-sep { height: 1px; background: var(--divider-soft); margin: var(--space-1) 0; }
+.acct-menu-hint {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+/* Several accounts selected: their dots overlap in the trigger */
+.acct-dots { display: inline-flex; flex-shrink: 0; }
+.acct-dots .acct-dot + .acct-dot { margin-left: -3px; box-shadow: 0 0 0 2px var(--surface-control); }
+.acct-row { padding-left: var(--space-3); }
+.acct-row .dropdown-item { padding-left: var(--space-2); }
+.acct-check { width: 16px; height: 16px; margin: 0; flex-shrink: 0; cursor: pointer; }
+.acct-check:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+
+/* Delete account confirmation */
+.modal.acct-delete { width: 460px; }
+.acct-delete-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-section);
+  color: var(--text-primary);
+}
+.acct-delete-title .acct-dot { width: 10px; height: 10px; }
+.acct-delete-body p { margin: 0 0 var(--space-3); color: var(--text-secondary); line-height: 1.55; }
+.acct-delete-body strong { color: var(--text-primary); font-weight: 600; }
+.acct-delete-body .acct-delete-note { font-size: var(--fs-small); color: var(--text-tertiary); }
+.acct-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
 
 /* Dropdown menu items (account menu, date presets) */
 .dropdown-item {

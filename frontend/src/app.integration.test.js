@@ -61,6 +61,8 @@ jest.mock('./api', () => {
       list: fn(() => ok(ACCOUNTS)),
       create: fn(() => ok({ id: 3 })),
       update: fn(() => ok({})),
+      usage: fn(() => ok({ trades: 12, first_date: '2026-09-01', last_date: '2026-09-30', diary_entries: 0 })),
+      remove: fn(() => ok({ ok: true })),
     }),
     tradesApi: withDefault({
       list: fn((params = {}) => ok(params.open_only ? [OPEN_TRADE] : [TRADE, TRADE_2])),
@@ -158,9 +160,11 @@ test('Brain opens from the header as a dialog and closes on Escape', async () =>
 test('account menu keeps selection, rename and new-account controls', async () => {
   await renderApp();
   fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
-  const menu = screen.getByRole('menu', { name: 'Accounts' });
-  expect(within(menu).getByRole('menuitemradio', { name: 'All Accounts' })).toBeInTheDocument();
-  expect(within(menu).getByRole('menuitemradio', { name: /Day Trading/ })).toBeInTheDocument();
+  const menu = screen.getByRole('group', { name: 'Accounts' });
+  expect(within(menu).getByRole('button', { name: 'All Accounts' })).toBeInTheDocument();
+  expect(within(menu).getByRole('button', { name: 'Day Trading' })).toBeInTheDocument();
+  expect(within(menu).getByRole('checkbox', { name: 'Include Day Trading' })).toBeInTheDocument();
+  expect(within(menu).getByRole('button', { name: 'Delete Day Trading' })).toBeInTheDocument();
   expect(within(menu).getByRole('button', { name: /New Account/ })).toBeInTheDocument();
 
   fireEvent.click(within(menu).getByRole('button', { name: 'Rename Day Trading' }));
@@ -173,8 +177,33 @@ test('account menu keeps selection, rename and new-account controls', async () =
 test('choosing an account updates the shared header state', async () => {
   await renderApp();
   fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
-  fireEvent.click(screen.getByRole('menuitemradio', { name: /Swing/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Swing' }));
   expect(await screen.findByRole('button', { name: 'Account: Swing' })).toBeInTheDocument();
+});
+
+test('ticking accounts combines them, and ticking every one is All Accounts', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Include Swing' }));
+  expect(await screen.findByRole('button', { name: 'Account: Swing' })).toBeInTheDocument();
+  await waitFor(() => expect(kpisApi.get).toHaveBeenLastCalledWith(expect.objectContaining({ account_id: 2 })));
+
+  // The menu stays open, so a second box can be ticked.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Include Day Trading' }));
+  expect(await screen.findByRole('button', { name: 'Account: All Accounts' })).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: 'Include all accounts' })).toBeChecked();
+});
+
+test('deleting an account asks first and names how many trades go with it', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Swing' }));
+  const dialog = await screen.findByRole('alertdialog', { name: 'Delete Swing?' });
+  const confirm = await within(dialog).findByRole('button', { name: 'Delete account and 12 trades' });
+  expect(accountsApi.remove).not.toHaveBeenCalled();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(accountsApi.remove).toHaveBeenCalledWith(2));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 });
 
 test('Add Trade opens a modal dialog that closes on Escape', async () => {

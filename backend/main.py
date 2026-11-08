@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict
+from database import init_db, get_db, row_to_dict, in_marks, DB_PATH
 from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
 from ai_analysis import (
     analyze_diary_entry,
@@ -93,6 +93,24 @@ def get_connection():
         yield conn
     finally:
         conn.close()
+
+
+def account_ids(account_id: str | None = Query(None)) -> list[int] | None:
+    """?account_id=1 or ?account_id=1,4. None means all accounts."""
+    if account_id is None or not account_id.strip():
+        return None
+    try:
+        return sorted({int(p) for p in account_id.split(",") if p.strip()}) or None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="account_id must be an id or a comma-separated list of ids")
+
+
+def _summary_cache_key(key: str, account_id: list[int] | None) -> tuple[str, int | None]:
+    """(summary_date, account_id) an AI summary is cached under. A set of several
+    accounts has no account row of its own, so its ids go into the key."""
+    if account_id and len(account_id) > 1:
+        return f"{key}|accounts={','.join(map(str, account_id))}", None
+    return key, account_id[0] if account_id else None
 
 
 # ── Exception handlers ─────────────────────────────────────────────────────────
@@ -269,6 +287,59 @@ def update_account(account_id: int, data: AccountUpdate, conn: sqlite3.Connectio
 
     row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
     return row_to_dict(row)
+
+
+@app.get("/api/accounts/{account_id}/usage")
+def account_usage(account_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    """What deleting this account would remove, for the confirmation dialog."""
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Account not found")
+    t = conn.execute("SELECT COUNT(*), MIN(date), MAX(date) FROM trades WHERE account_id=?",
+                     (account_id,)).fetchone()
+    diary = conn.execute("SELECT COUNT(*) FROM diary_entries WHERE account_id=?", (account_id,)).fetchone()[0]
+    return {"trades": t[0], "first_date": t[1], "last_date": t[2], "diary_entries": diary}
+
+
+@app.delete("/api/accounts/{account_id}")
+def delete_account(account_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    """Delete an account and everything recorded under it. The database is
+    backed up first, so a delete can be undone by restoring that file."""
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Account not found")
+    if conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] <= 1:
+        raise ValueError("This is the only account. Create another one before deleting it.")
+
+    db = Path(DB_PATH)
+    backup = db.with_name(f"{db.stem}.backup-{datetime.now():%Y%m%d-%H%M%S}-predelete-account{account_id}.db")
+    dst = sqlite3.connect(backup)
+    try:
+        conn.backup(dst)
+    finally:
+        dst.close()
+
+    try:
+        groups = [r[0] for r in conn.execute(
+            "SELECT DISTINCT trade_group FROM trades WHERE account_id=?", (account_id,))]
+        trades = conn.execute("DELETE FROM trades WHERE account_id=?", (account_id,)).rowcount
+        # Notes and tags are keyed by trade_group alone. Keep the ones another
+        # account still has a trade for.
+        notes = 0
+        if groups:
+            orphan = f"trade_group IN ({in_marks(groups)}) AND trade_group NOT IN (SELECT trade_group FROM trades)"
+            notes = conn.execute(f"DELETE FROM trade_analysis WHERE {orphan}", groups).rowcount
+            conn.execute(f"DELETE FROM trade_tags WHERE {orphan}", groups)
+        conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id IN "
+                     "(SELECT id FROM diary_entries WHERE account_id=?)", (account_id,))
+        diary = conn.execute("DELETE FROM diary_entries WHERE account_id=?", (account_id,)).rowcount
+        conn.execute("DELETE FROM daily_summaries WHERE account_id=?", (account_id,))
+        conn.execute("DELETE FROM settings WHERE account_id=?", (account_id,))
+        conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"ok": True, "trades": trades, "trade_notes": notes, "diary_entries": diary,
+            "backup": backup.name}
 
 
 @app.post("/api/accounts", status_code=201)
@@ -573,7 +644,7 @@ def _is_open_position(trade: dict) -> bool:
 
 @app.get("/api/trades")
 def list_trades(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     instrument_type: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
@@ -591,9 +662,9 @@ def list_trades(
     """
     params = []
 
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if instrument_type:
         sql += " AND t.instrument_type = ?"
         params.append(instrument_type.upper())
@@ -944,8 +1015,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
            "WHERE instrument_type='STOCK' AND mfe_pct IS NOT NULL "
            "AND net_pnl IS NOT NULL AND net_pnl <> 0")
     params = []
-    if account_id is not None:
-        sql += " AND account_id = ?"; params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"; params += account_id
     if date_from:
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
@@ -980,7 +1051,7 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
 
 @app.get("/api/kpis")
 def get_kpis(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -988,9 +1059,9 @@ def get_kpis(
     sql = "SELECT * FROM trades WHERE 1=1"
     params = []
 
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND date >= ?"
         params.append(date_from)
@@ -1089,9 +1160,9 @@ def get_kpis(
         WHERE label IS NOT NULL
     """
     strat_params = []
-    if account_id is not None:
-        strategy_sql += " AND account_id = ?"
-        strat_params.append(account_id)
+    if account_id:
+        strategy_sql += f" AND account_id IN ({in_marks(account_id)})"
+        strat_params += account_id
     strategy_sql += " GROUP BY label ORDER BY total_pnl DESC"
 
     strat_rows = conn.execute(strategy_sql, strat_params).fetchall()
@@ -1230,14 +1301,14 @@ async def upload_diary(
 
 @app.get("/api/diary")
 def list_diary(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = "SELECT * FROM diary_entries WHERE 1=1"
     params = []
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     sql += " ORDER BY entry_date DESC"
 
     rows = conn.execute(sql, params).fetchall()
@@ -1256,14 +1327,14 @@ def list_diary(
 @app.delete("/api/diary/by-date/{date}")
 def delete_diary_by_date(
     date: str,
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     where = "entry_date=?"
     params: list = [date]
-    if account_id is not None:
-        where += " AND account_id=?"
-        params.append(account_id)
+    if account_id:
+        where += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     # trade_analysis.diary_entry_id points back here, so unlink first: the
     # analysis (including anything edited by hand) stays on the trade.
     conn.execute(
@@ -1437,7 +1508,7 @@ async def get_chart(
 
 @app.get("/api/calendar")
 def get_calendar(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     year: int | None = Query(None),
     month: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1445,9 +1516,9 @@ def get_calendar(
     sql = "SELECT date, net_pnl FROM trades WHERE 1=1"
     params = []
 
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     if year and month:
         date_from = f"{year:04d}-{month:02d}-01"
         next_month_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -1473,9 +1544,9 @@ def get_calendar(
     # Which days have diary entries
     diary_sql = "SELECT entry_date FROM diary_entries WHERE 1=1"
     diary_params = []
-    if account_id is not None:
-        diary_sql += " AND account_id = ?"
-        diary_params.append(account_id)
+    if account_id:
+        diary_sql += f" AND account_id IN ({in_marks(account_id)})"
+        diary_params += account_id
     diary_rows = conn.execute(diary_sql, diary_params).fetchall()
     diary_dates = {r['entry_date'] for r in diary_rows}
 
@@ -1500,14 +1571,14 @@ def get_calendar(
 @app.get("/api/yearly-kpis")
 def get_yearly_kpis(
     year: int = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = "SELECT date, net_pnl, gross_pnl FROM trades WHERE strftime('%Y', date) = ?"
     params = [str(year)]
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
 
     rows = conn.execute(sql + " ORDER BY date", params).fetchall()
 
@@ -1634,7 +1705,7 @@ def _ordered(buckets, order):
 
 @app.get("/api/reports")
 def get_reports(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1653,9 +1724,9 @@ def get_reports(
         WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1828,9 +1899,9 @@ def _leak_rows(conn, account_id, date_from, date_to):
         WHERE 1=1
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1857,7 +1928,7 @@ def _leak_rows(conn, account_id, date_from, date_to):
 
 @app.get("/api/leaks")
 def get_leaks(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1885,7 +1956,7 @@ def get_leaks(
 
 @app.get("/api/leaks/explain")
 def explain_leak_findings(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1930,7 +2001,7 @@ def explain_leak_findings(
 
 @app.get("/api/edge-report")
 def get_edge_report(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1943,9 +2014,9 @@ def get_edge_report(
         WHERE 1=1
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1965,9 +2036,9 @@ def get_edge_report(
         WHERE tt.tag_type = 'mistake'
     """
     tag_params: list = []
-    if account_id is not None:
-        tag_sql += " AND t.account_id = ?"
-        tag_params.append(account_id)
+    if account_id:
+        tag_sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        tag_params += account_id
     if date_from:
         tag_sql += " AND t.date >= ?"
         tag_params.append(date_from)
@@ -2162,7 +2233,7 @@ def get_edge_report(
 
 @app.get("/api/insights")
 def get_insights(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     # Reuse KPI data as input to insights. Pass explicit None for the date
@@ -2182,7 +2253,7 @@ def get_insights(
 @app.get("/api/weekly-summary")
 def get_weekly_summary(
     date: str = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
@@ -2193,12 +2264,12 @@ def get_weekly_summary(
     week_label = f"{week_start.strftime('%Y')}-W{week_start.strftime('%V')}"
     week_from = week_start.strftime("%Y-%m-%d")
     week_to = week_end.strftime("%Y-%m-%d")
-    cache_key = f"weekly_{week_label}"
+    cache_key, cache_acct = _summary_cache_key(f"weekly_{week_label}", account_id)
 
-    if not force and account_id is not None:
+    if not force and account_id:
         cached = conn.execute(
-            "SELECT ai_content FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
-            (cache_key, account_id),
+            "SELECT ai_content FROM daily_summaries WHERE summary_date = ? AND account_id IS ?",
+            (cache_key, cache_acct),
         ).fetchone()
         if cached and cached[0]:
             try:
@@ -2215,9 +2286,9 @@ def get_weekly_summary(
         WHERE t.date >= ? AND t.date <= ?
     """
     params: list = [week_from, week_to]
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     sql += " ORDER BY t.date, t.id"
 
     rows = conn.execute(sql, params).fetchall()
@@ -2243,13 +2314,17 @@ def get_weekly_summary(
     result["week_from"] = week_from
     result["week_to"] = week_to
 
-    if account_id is not None:
+    if account_id:
         try:
+            if cache_acct is None:
+                # NULL never conflicts on UNIQUE, so clear the old row by hand.
+                conn.execute("DELETE FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+                             (cache_key,))
             conn.execute(
                 """INSERT OR REPLACE INTO daily_summaries
                    (account_id, summary_date, ai_content, generated_at)
                    VALUES (?, ?, ?, ?)""",
-                (account_id, cache_key, json.dumps(result), datetime.now().isoformat()),
+                (cache_acct, cache_key, json.dumps(result), datetime.now().isoformat()),
             )
             conn.commit()
         except Exception:
@@ -2263,15 +2338,16 @@ def get_weekly_summary(
 @app.get("/api/daily-summary")
 def get_daily_summary(
     date: str = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
+    cache_key, cache_acct = _summary_cache_key(date, account_id)
     # Check cache first
     if not force:
         row = conn.execute(
             "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND (account_id = ? OR (account_id IS NULL AND ? IS NULL))",
-            (date, account_id, account_id)
+            (cache_key, cache_acct, cache_acct)
         ).fetchone()
         if row:
             try:
@@ -2299,9 +2375,12 @@ def get_daily_summary(
             }
         raise HTTPException(status_code=500, detail=str(e))
 
+    if cache_acct is None:
+        # NULL never conflicts on UNIQUE, so clear the old row by hand.
+        conn.execute("DELETE FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL", (cache_key,))
     conn.execute(
         "INSERT OR REPLACE INTO daily_summaries (summary_date, account_id, ai_content, generated_at) VALUES (?, ?, ?, datetime('now'))",
-        (date, account_id, json.dumps(summary))
+        (cache_key, cache_acct, json.dumps(summary))
     )
     conn.commit()
 
@@ -2321,7 +2400,8 @@ async def brain_chat(
 ):
     body = await req.json()
     messages = body.get("messages", [])
-    account_id = body.get("account_id")
+    raw = body.get("account_id")
+    account_id = account_ids(None if raw is None else str(raw))
 
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
