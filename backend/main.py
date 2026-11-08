@@ -522,7 +522,8 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
     new_keys = {t['trade_group'] for t in trades}
 
     def fill_key(e):
-        return (e.get('date'), e.get('time'), e.get('action'), e.get('price'))
+        # split_part tells the closing half of a reversal from the opening half
+        return (e.get('date'), e.get('time'), e.get('action'), e.get('price'), e.get('split_part'))
 
     moves = {}
     for g in old_groups:
@@ -664,6 +665,8 @@ async def import_csv(
                 ))
                 imported += 1
             except Exception as e:
+                if trade.get('replaces'):
+                    raise  # its old rows were cleared: undo the whole import instead
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
         if save_zone:

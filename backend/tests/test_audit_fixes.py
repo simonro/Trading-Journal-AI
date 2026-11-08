@@ -306,3 +306,39 @@ def test_merge_keeps_every_review_field(client):
     assert len(row) == 1
     notes, target, source, rating = row[0]
     assert "a" in notes and "b" in notes and target == 55 and source == "Watchlist" and rating == 4
+
+
+# Review of the private adaptation ------------------------------------------------------------
+
+def test_notes_on_the_short_half_of_a_reversal_stay_on_the_short(client):
+    post(client, ["2026-09-18,09:31:00,XYZ,BUY,100,10,0,STOCK,,,,",
+                  "2026-09-18,09:40:00,XYZ,SELL,200,11,0,STOCK,,,,"])
+    short = [t for t in trades(client) if not t["gross_pnl"]][0]["trade_group"]
+    conn = sqlite3.connect(client.db)
+    conn.execute("INSERT INTO trade_analysis (trade_group, account_id, ticker, date, notes) "
+                 "VALUES (?, 1, 'XYZ', '2026-09-18', 'short idea')", (short,))
+    conn.commit()
+    post(client, ["2026-09-18,10:00:00,XYZ,BUY,100,10.5,0,STOCK,,,,"])
+    conn = sqlite3.connect(client.db)
+    group = conn.execute("SELECT trade_group FROM trade_analysis WHERE notes='short idea'").fetchone()[0]
+    side = conn.execute("SELECT side FROM trades WHERE trade_group=?", (group,)).fetchone()[0]
+    assert side == "SHORT"
+
+
+def test_a_failed_rebuild_undoes_the_import(client):
+    # an open position: closing it on a later day rebuilds it under a new name
+    post(client, ["2026-09-19,09:30:00,ABC,BUY,10,50,0,STOCK,,,,"])
+    before = trades(client)
+    conn = sqlite3.connect(client.db)
+    conn.execute("CREATE TRIGGER no_abc BEFORE INSERT ON trades WHEN NEW.ticker = 'ABC' "
+                 "BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    conn.commit()
+    content = HEADER + "2026-09-22,10:10:00,ABC,SELL,10,52,0,STOCK,,,,\n"
+    try:
+        client.post("/api/import-csv", data={"account_id": "1", "broker": "generic"},
+                    files={"file": ("t.csv", content.encode(), "text/csv")})
+    except Exception:
+        pass  # the test client may re-raise the server error
+    after = trades(client)
+    assert [t["trade_group"] for t in after] == [t["trade_group"] for t in before]
+    assert after[0]["executions"] == before[0]["executions"]
