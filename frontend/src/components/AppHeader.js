@@ -358,7 +358,27 @@ export default function AppHeader({
     <header className="app-header">
       <div className="app-header-inner">
         <button type="button" className="app-brand" onClick={() => onNavigate('dashboard')} aria-label="AI Journal, go to Dashboard">
-          <img src={aiJournalLogo} alt="AI Journal" />
+          <img className="app-brand-png" src={aiJournalLogo} alt="AI Journal" />
+          {/* The PNG's wordmark is white, so themes draw the mark in their own colours (themes.css) */}
+          <span className="app-brand-alt" aria-hidden="true">
+            <svg viewBox="0 0 32 28" width="34" height="30">
+              <defs>
+                <linearGradient id="app-brand-grad" x1="0" y1="1" x2="1" y2="0">
+                  <stop offset="0" stopColor="var(--logo-a)" />
+                  <stop offset="1" stopColor="var(--logo-b)" />
+                </linearGradient>
+              </defs>
+              <path d="M3 8c4-1.6 8.5-1.2 13 1.4C20.5 6.8 25 6.4 29 8v16c-4-1.6-8.5-1.2-13 1.4C11.5 22.8 7 22.4 3 24z"
+                fill="none" stroke="url(#app-brand-grad)" strokeWidth="2" strokeLinejoin="round" />
+              <path d="M16 9.4v16" stroke="url(#app-brand-grad)" strokeWidth="2" />
+              <g fill="url(#app-brand-grad)">
+                <rect x="18.6" y="13" width="2" height="5" rx=".5" />
+                <rect x="21.6" y="10" width="2" height="5" rx=".5" />
+                <rect x="24.6" y="7" width="2" height="5" rx=".5" />
+              </g>
+            </svg>
+            <span className="app-brand-word">AI Journal</span>
+          </span>
         </button>
 
         <nav className="app-nav" aria-label="Main">

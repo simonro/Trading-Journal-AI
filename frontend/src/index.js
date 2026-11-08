@@ -2,8 +2,12 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import './v3.css';
+import './themes.css';
+import { watchOtherTabs } from './theme';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
+
+watchOtherTabs();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

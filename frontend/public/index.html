@@ -27,6 +27,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- fonts for the optional themes (Settings > Appearance); loaded without blocking first paint -->
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@300..700&family=Source+Serif+4:opsz,wght@8..60,400..700&family=Source+Sans+3:wght@400..700&family=JetBrains+Mono:wght@400..700&family=IBM+Plex+Sans+Condensed:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <script>
+      /* Apply the saved theme before the app paints, so a light theme never flashes dark.
+         Keep the ids and colours in step with src/theme.js. */
+      (function () {
+        var colors = { minimal: '#FAFAF9', natural: '#F3EEE4', terminal: '#000000' };
+        try {
+          var t = localStorage.getItem('journal-theme');
+          if (t && colors[t]) {
+            document.documentElement.setAttribute('data-theme', t);
+            document.querySelector('meta[name="theme-color"]').setAttribute('content', colors[t]);
+          }
+        } catch (e) { /* storage blocked: stay on Current */ }
+      })();
+    </script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

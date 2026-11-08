@@ -231,6 +231,11 @@ summary:focus-visible {
   border-radius: var(--radius-md);
 }
 .app-brand img { height: 46px; width: auto; display: block; }
+.app-brand-alt { flex-direction: column; align-items: center; gap: 2px; height: 46px; justify-content: center; }
+.app-brand-word {
+  font-family: var(--font-display); font-weight: 600; font-size: 11px; line-height: 1;
+  color: var(--text-primary); white-space: nowrap;
+}
 
 .app-nav {
   grid-area: nav;
@@ -295,6 +300,8 @@ summary:focus-visible {
 @media (max-width: 720px) {
   .app-header-inner { padding: var(--space-2) var(--space-4) 0; column-gap: var(--space-3); }
   .app-brand img { height: 38px; }
+  .app-brand-alt { height: 38px; }
+  .app-brand-alt svg { width: 28px; height: 25px; }
   .app-nav { gap: 0; }
   .app-nav-item { padding: 0 10px; font-size: 14px; }
 }
@@ -1052,3 +1059,23 @@ button.month-card:active { transform: translateY(1px); }
   cursor: pointer; padding: 0 2px;
 }
 .update-banner-close:hover { color: var(--text-primary); }
+
+/* ---------- Settings > Appearance: theme picker ---------- */
+.theme-picker {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4); margin-top: var(--space-5);
+}
+.theme-card {
+  position: relative; display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-4); border: 1px solid var(--divider); border-radius: var(--radius-md);
+  background: var(--surface-panel); cursor: pointer;
+}
+.theme-card:hover { border-color: var(--divider-strong); }
+.theme-card.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+.theme-card input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.theme-card:has(input:focus-visible) { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.theme-swatches { display: flex; height: 28px; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--divider-soft); }
+.theme-swatches i { flex: 1 1 0; }
+.theme-swatches i:first-child { flex-grow: 2.4; }
+.theme-name { font-weight: 600; color: var(--text-primary); font-size: var(--fs-body); }
+.theme-desc { font-size: var(--fs-small); color: var(--text-secondary); line-height: 1.4; }

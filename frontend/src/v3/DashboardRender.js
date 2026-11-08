@@ -117,7 +117,9 @@ function Patterns({ edge, byStrategy, onViewAll }) {
                 {tab === 'str' && <th className="r">Win rate</th>}
                 {view === 'table' && <th className="r">Avg / trade</th>}
                 {view === 'table' && tab === 'str' && <th className="r v3-hide-s">Avg R</th>}
-                {view === 'bars' && <th>Net</th>}
+                {view === 'bars' && (
+                  <th aria-label="Net"><span className="v3-zero-head" aria-hidden="true"><span>Loss</span><span>0</span><span>Profit</span></span></th>
+                )}
                 <th className="r">Total</th>
               </tr>
             </thead>
@@ -140,7 +142,7 @@ function Patterns({ edge, byStrategy, onViewAll }) {
                     </td>
                   )}
                   {view === 'bars' && (
-                    <td><BarRow frac={Math.abs(r.v || 0) / peak} negative={(r.v || 0) < 0} /></td>
+                    <td><BarRow frac={Math.abs(r.v || 0) / peak} negative={(r.v || 0) < 0} diverge /></td>
                   )}
                   <td className={`r v3-mono ${tone(r.v)}`} style={{ fontWeight: 600 }}>{money(r.v)}</td>
                 </tr>

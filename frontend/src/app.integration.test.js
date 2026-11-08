@@ -301,12 +301,12 @@ test('Day Review keeps the loss-streak alert and its Dismiss control', async () 
   expect(screen.getByRole('button', { name: /Regenerate AI/ })).toBeInTheDocument();
 });
 
-test('Settings has General, Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {
+test('Settings has General, Strategies, Sources, Tags and Appearance sections, and Tags leaves out strategy and source types', async () => {
   await renderApp();
   fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   expect(within(tablist).getAllByRole('tab').map(t => t.textContent.replace(/\d+/g, '').trim()))
-    .toEqual(['General', 'Strategies', 'Sources', 'Tags']);
+    .toEqual(['General', 'Strategies', 'Sources', 'Tags', 'Appearance']);
   expect(await screen.findByText('VWAP Cross')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit VWAP Cross' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete VWAP Cross' })).toBeInTheDocument();
@@ -316,6 +316,29 @@ test('Settings has General, Strategies, Sources and Tags sections, and Tags leav
   expect(screen.getByRole('region', { name: 'Execution tags' })).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Strategy tags/ })).not.toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Source tags/ })).not.toBeInTheDocument();
+});
+
+test('Settings > Appearance switches the theme and remembers it in this browser', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Appearance' }));
+  const group = await screen.findByRole('radiogroup', { name: 'Theme' });
+  expect(within(group).getByRole('radio', { name: /Current/ })).toBeChecked();
+
+  try {
+    fireEvent.click(within(group).getByRole('radio', { name: /Natural/ }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('natural');
+    expect(window.localStorage.getItem('journal-theme')).toBe('natural');
+
+    fireEvent.click(within(group).getByRole('radio', { name: /Current/ }));
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(window.localStorage.getItem('journal-theme')).toBeNull();
+  } finally {
+    // never let a theme leak into the tests that follow
+    document.documentElement.removeAttribute('data-theme');
+    window.localStorage.removeItem('journal-theme');
+  }
 });
 
 test('Settings merges one strategy into another', async () => {

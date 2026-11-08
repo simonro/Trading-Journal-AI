@@ -147,7 +147,7 @@ function BucketBars({ rows, height = 240 }) {
             if (!active || !payload?.length) return null;
             const d = payload[0].payload;
             return (
-              <div className="card" style={{ padding: '8px 12px', fontSize: 13 }}>
+              <div className="card chart-tip" style={{ padding: '8px 12px', fontSize: 13 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
                 <div className={`num ${tone(d.pnl)}`} style={{ fontWeight: 600 }}>
                   {signed$(d.pnl)}
@@ -189,7 +189,7 @@ function EquityCurve({ curve }) {
             if (!active || !payload?.length) return null;
             const d = payload[0].payload;
             return (
-              <div className="card" style={{ padding: '8px 12px', fontSize: 13 }}>
+              <div className="card chart-tip" style={{ padding: '8px 12px', fontSize: 13 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
                 <div>Equity: <b className="num">{fmt$(d.cumulative)}</b></div>
                 <div className={`num ${tone(d.pnl)}`}>
@@ -230,7 +230,7 @@ function DrawdownCurve({ curve }) {
           content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null;
             return (
-              <div className="card" style={{ padding: '8px 12px', fontSize: 13 }}>
+              <div className="card chart-tip" style={{ padding: '8px 12px', fontSize: 13 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
                 <div className="num neg">{fmt$(payload[0].value)} off peak</div>
               </div>

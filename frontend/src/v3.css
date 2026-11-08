@@ -53,6 +53,26 @@
   --sticky-offset: 70px;
 
   --v3-pad: clamp(20px, 4vw, 56px);
+
+  /* theme hooks: the defaults are the Current look, see themes.css and docs/DESIGN.md */
+  --hero-glow-a: rgba(240, 169, 59, 0.16);
+  --hero-glow-b: rgba(55, 211, 153, 0.055);
+  --shadow-tip: 0 14px 34px -14px rgba(0, 0, 0, 0.8);
+  --shadow-gtip: 0 14px 34px -14px rgba(0, 0, 0, 0.85);
+  --shadow-pop: 0 26px 60px -20px rgba(0, 0, 0, 0.85);
+  --display-weight: 800;          /* page titles and the account figure */
+  --kpi-weight: 600;              /* measure values */
+  --display-tracking: 1;          /* multiplier on the tight display letter-spacing */
+  --goal: var(--accent-line);     /* goal marks on the measures */
+  --curve-line: var(--result-pos);
+  --curve-fill-top: 0.22;
+  --curve-w: 1.6;
+  --chart-dd-opacity: 0.13;
+  --peak-line: var(--text-tertiary);
+  --chart-crosshair-line: #758696;   /* lightweight-charts defaults */
+  --chart-crosshair-label: #4C525E;
+  --logo-a: #5B5BF0;
+  --logo-b: #2DE2A6;
 }
 
 body { background: var(--surface-page); font-family: var(--font-body); font-size: 14px; }
@@ -68,6 +88,12 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
 .card, .panel, .panel-flush {
   background: transparent; border: 0; border-radius: 0;
   box-shadow: none !important;
+}
+
+/* chart tooltips reuse .card, so they need their surface back */
+.card.chart-tip {
+  background: var(--surface-panel); border: 1px solid var(--divider);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-tip) !important;
 }
 
 /* ---------- shared type ---------- */
@@ -89,8 +115,8 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
   display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; flex-wrap: wrap;
 }
 .v3-head h1 {
-  font-family: var(--font-display); font-weight: 800; font-size: 38px;
-  letter-spacing: -0.04em; line-height: 1; margin: 0;
+  font-family: var(--font-display); font-weight: var(--display-weight); font-size: 38px;
+  letter-spacing: calc(-0.04em * var(--display-tracking)); line-height: 1; margin: 0;
 }
 .v3-head .v3-sub { color: var(--text-tertiary); font-size: 13px; margin-top: 7px; }
 .v3-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -120,8 +146,8 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
 .v3-hero::after {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(120% 90% at 88% 118%, rgba(240, 169, 59, 0.16), transparent 58%),
-    radial-gradient(90% 70% at 6% -10%, rgba(55, 211, 153, 0.055), transparent 60%);
+    radial-gradient(120% 90% at 88% 118%, var(--hero-glow-a), transparent 58%),
+    radial-gradient(90% 70% at 6% -10%, var(--hero-glow-b), transparent 60%);
 }
 /* the curve gets its own clear band below the figure so hovering it is easy */
 .v3-curve {
@@ -139,7 +165,7 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
   position: absolute; z-index: 5; pointer-events: none;
   background: var(--surface-panel); border: 1px solid var(--divider);
   border-radius: var(--radius-sm); padding: 8px 11px; min-width: 148px;
-  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.8);
+  box-shadow: var(--shadow-tip);
 }
 .v3-tipbox .d { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .v3-tipbox .v {
@@ -151,8 +177,8 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
 .v3-eyeline { display: flex; align-items: flex-start; justify-content: space-between; gap: 30px; flex-wrap: wrap; }
 .v3-acct { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-tertiary); margin: 0 0 10px; }
 .v3-money {
-  font-family: var(--font-display); font-weight: 800;
-  font-size: clamp(44px, 7vw, 76px); line-height: 0.9; letter-spacing: -0.045em;
+  font-family: var(--font-display); font-weight: var(--display-weight);
+  font-size: clamp(44px, 7vw, 76px); line-height: 0.9; letter-spacing: calc(-0.045em * var(--display-tracking));
   font-variant-numeric: tabular-nums lining-nums; margin: 0; display: flex; align-items: baseline;
 }
 .v3-money .cents { font-size: 0.42em; letter-spacing: -0.02em; opacity: 0.55; margin-left: 0.1em; }
@@ -220,8 +246,8 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
 .v3-measures-4 .v3-m:nth-child(4n) { border-right: 0; }
 .v3-measures-4 .v3-m:nth-child(-n+4) { border-bottom: 1px solid var(--divider-soft); }
 .v3-m-val {
-  font-family: var(--font-display); font-weight: 600; font-size: 30px;
-  letter-spacing: -0.035em; line-height: 1; font-variant-numeric: tabular-nums;
+  font-family: var(--font-display); font-weight: var(--kpi-weight); font-size: 30px;
+  letter-spacing: calc(-0.035em * var(--display-tracking)); line-height: 1; font-variant-numeric: tabular-nums;
 }
 .v3-m-read { font-size: 12.5px; color: var(--text-secondary); line-height: 1.35; }
 .v3-m-read b { color: var(--text-primary); font-weight: 600; }
@@ -233,10 +259,10 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
   transform: scaleX(var(--f, 0)); transition: transform 0.7s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 .v3-track-fill.met { background: var(--result-pos); }
-.v3-track-goal { position: absolute; top: 2px; width: 1px; height: 12px; background: var(--accent-line); left: var(--g); }
+.v3-track-goal { position: absolute; top: 2px; width: 1px; height: 12px; background: var(--goal); left: var(--g); }
 .v3-track-goal::after {
   content: attr(data-g); position: absolute; top: 13px; left: 50%; transform: translateX(-50%);
-  font-size: 10px; color: var(--accent-line); white-space: nowrap;
+  font-size: 10px; color: var(--goal); white-space: nowrap;
 }
 .v3-m.met .v3-m-val { color: var(--result-pos); }
 
@@ -283,6 +309,15 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   transition: transform 0.8s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 .v3-bar-fill.neg { background: var(--result-neg); }
+/* diverging: zero in the middle, profit grows right, loss grows left */
+.v3-bar.diverge .v3-bar-fill { left: 50%; right: auto; width: 50%; border-radius: 0 6px 6px 0; }
+.v3-bar.diverge .v3-bar-fill.neg { left: auto; right: 50%; transform-origin: right; border-radius: 6px 0 0 6px; }
+.v3-bar.diverge::after {
+  content: ""; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px;
+  margin-left: -0.5px; background: var(--text-tertiary); opacity: 0.6;
+}
+.v3-zero-head { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; }
+.v3-zero-head > :last-child { text-align: right; }
 .v3-bar-val {
   flex: none; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   font-size: 12px; color: var(--text-secondary); min-width: 46px; text-align: right;
@@ -302,7 +337,7 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
   position: absolute; left: 50%; bottom: calc(100% + 7px); transform: translateX(-50%);
   background: var(--surface-panel); border: 1px solid var(--divider); border-radius: var(--radius-sm);
   padding: 8px 11px; width: 230px; z-index: 20; text-align: left;
-  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.85);
+  box-shadow: var(--shadow-gtip);
   font-size: 12.5px; color: var(--text-secondary); line-height: 1.5;
 }
 .v3-gtip b { color: var(--text-primary); display: block; font-weight: 600; margin-bottom: 3px; }
@@ -358,7 +393,7 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-day .d { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .v3-day .v { font-family: var(--font-display); font-weight: 600; font-size: 18px; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; margin-top: auto; }
 .v3-day .c { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.v3-day::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: var(--tint, transparent); opacity: var(--ti, 0); }
+.v3-day::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: var(--tint, transparent); opacity: calc(var(--ti, 0) * var(--cal-tint-scale, 1)); }
 .v3-day > * { position: relative; }
 .v3-day[data-today] .d { color: var(--accent-line); font-weight: 600; }
 .v3-day[data-today]::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent-line); }
@@ -376,7 +411,7 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-pop {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 60;
   background: var(--surface-panel); border: 1px solid var(--divider); border-radius: var(--radius-sm);
-  box-shadow: 0 26px 60px -20px rgba(0, 0, 0, 0.85); display: flex; min-width: 280px;
+  box-shadow: var(--shadow-pop); display: flex; min-width: 280px;
 }
 .v3-pop-presets { padding: 14px 16px; display: flex; flex-direction: column; gap: 2px; min-width: 168px; }
 .v3-pop-presets button {

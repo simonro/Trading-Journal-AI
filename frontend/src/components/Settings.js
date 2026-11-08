@@ -2,13 +2,49 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Pencil, GitMerge, Trash2, Search } from 'lucide-react';
 import { libraryApi, appSettingsApi } from '../api';
 import { PageHeader } from './ui';
+import { THEMES, activeTheme, setTheme } from '../theme';
 
 const SECTIONS = [
   { id: 'general', label: 'General' },
   { id: 'strategy', label: 'Strategies' },
   { id: 'source', label: 'Sources' },
   { id: 'tag', label: 'Tags' },
+  { id: 'appearance', label: 'Appearance' },
 ];
+// Sections that load nothing from the name library.
+const STATIC_SECTIONS = new Set(['general', 'appearance']);
+
+/* Theme picker. Saved in this browser only; nothing goes to the journal database. */
+function Appearance() {
+  const [active, setActive] = useState(activeTheme);
+  const pick = (id) => setActive(setTheme(id));
+  return (
+    <section className="card" aria-labelledby="appearance-title">
+      <h2 className="section-title" id="appearance-title">Theme</h2>
+      <div className="section-sub">
+        Colours, fonts and chart style. Everything stays in the same place. Saved in this browser only.
+      </div>
+      <div className="theme-picker" role="radiogroup" aria-labelledby="appearance-title">
+        {THEMES.map((t) => (
+          <label key={t.id} className={`theme-card${active === t.id ? ' on' : ''}`}>
+            <input
+              type="radio"
+              name="journal-theme"
+              value={t.id}
+              checked={active === t.id}
+              onChange={() => pick(t.id)}
+            />
+            <span className="theme-swatches" aria-hidden="true">
+              {t.swatches.map((c) => <i key={c} style={{ background: c }} />)}
+            </span>
+            <span className="theme-name">{t.name}</span>
+            <span className="theme-desc">{t.description}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 const TAG_TYPE_LABEL = {
   mistake: 'Mistakes', execution: 'Execution', setup: 'Setup', emotion: 'Emotion', outcome: 'Outcome',
@@ -375,17 +411,24 @@ export default function Settings() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Arrow keys, Home and End move the selection and the keyboard focus together.
   const onTabKey = (e) => {
     const i = SECTIONS.findIndex(s => s.id === section);
-    if (e.key === 'ArrowRight') setSection(SECTIONS[(i + 1) % SECTIONS.length].id);
-    if (e.key === 'ArrowLeft') setSection(SECTIONS[(i - 1 + SECTIONS.length) % SECTIONS.length].id);
+    const n = SECTIONS.length;
+    const next = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+    if (next == null) return;
+    e.preventDefault();
+    setSection(SECTIONS[next].id);
+    document.getElementById(`settings-tab-${SECTIONS[next].id}`)?.focus();
   };
 
   return (
     <div>
       <PageHeader
         title="Settings"
-        subtitle="Clean up the names the journal uses. Renames and merges update every trade that uses the name."
+        subtitle={section === 'appearance'
+          ? 'Choose how the journal looks.'
+          : 'Clean up the names the journal uses. Renames and merges update every trade that uses the name.'}
       />
 
       <div className="tabs" role="tablist" aria-label="Settings sections" style={{ marginBottom: 'var(--space-5)' }}>
@@ -403,7 +446,7 @@ export default function Settings() {
             onKeyDown={onTabKey}
           >
             {s.label}
-            {lib && s.id !== 'general' && (
+            {lib && s.id !== 'general' && s.id !== 'appearance' && (
               <span className="text-muted num" style={{ marginLeft: 6, fontWeight: 500 }}>
                 {s.id === 'tag'
                   ? TAG_TYPE_ORDER.reduce((n, t) => n + (lib.tags?.[t]?.length || 0), 0)
@@ -416,8 +459,9 @@ export default function Settings() {
 
       <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${section}`}>
         {section === 'general' && <GeneralSettings />}
-        {section !== 'general' && loadError && <div className="notice neg" role="alert">{loadError}</div>}
-        {section !== 'general' && !lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
+        {section === 'appearance' && <Appearance />}
+        {!STATIC_SECTIONS.has(section) && loadError && <div className="notice neg" role="alert">{loadError}</div>}
+        {!STATIC_SECTIONS.has(section) && !lib && !loadError && <div className="skeleton" style={{ height: 320 }} />}
 
         {lib && section === 'strategy' && (
           <ItemList kind="strategy" {...SECTION_COPY.strategy} items={lib.strategies} onChanged={load} />

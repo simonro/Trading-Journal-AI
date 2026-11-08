@@ -31,7 +31,7 @@ export default function YearBehind({ accountId }) {
             <th>Month</th>
             <th className="r">Trades</th>
             <th className="r v3-hide-s">Win rate</th>
-            <th className="v3-hide-s">Shape</th>
+            <th className="v3-hide-s" aria-label="Shape"><span className="v3-zero-head" aria-hidden="true"><span>Loss</span><span>0</span><span>Profit</span></span></th>
             <th className="r">Net</th>
             <th className="r">Balance</th>
           </tr>
@@ -51,7 +51,7 @@ export default function YearBehind({ accountId }) {
                   {m.win_rate == null ? '—' : `${Number(m.win_rate).toFixed(0)}%`}
                 </td>
                 <td className="v3-hide-s">
-                  <BarRow frac={Math.abs(m.net_pnl || 0) / peak} negative={(m.net_pnl || 0) < 0} />
+                  <BarRow frac={Math.abs(m.net_pnl || 0) / peak} negative={(m.net_pnl || 0) < 0} diverge />
                 </td>
                 <td className={`r v3-mono ${tone(m.net_pnl)}`} style={{ fontWeight: 600 }}>
                   {money(m.net_pnl)}
