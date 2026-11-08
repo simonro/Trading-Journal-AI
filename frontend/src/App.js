@@ -112,7 +112,7 @@ export default function App() {
 
       <main className="app-main" id="main">
         <UpdateBanner />
-        {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountId == null || a.id === selectedAccountId))} />}
+        {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountIds.length === 0 || selectedAccountIds.includes(a.id)))} />}
         {page === 'dashboard' && (
           <Dashboard
             accountId={accountId}

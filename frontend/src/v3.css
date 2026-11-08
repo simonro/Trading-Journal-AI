@@ -69,6 +69,9 @@
   --curve-w: 1.6;
   --chart-dd-opacity: 0.13;
   --peak-line: var(--text-tertiary);
+  /* cards are transparent here, so the table scroll covers paint the page colour */
+  --scroll-cover: var(--surface-page);
+  --scroll-cover-fade: transparent;
   --chart-crosshair-line: #758696;   /* lightweight-charts defaults */
   --chart-crosshair-label: #4C525E;
   --logo-a: #5B5BF0;
@@ -89,6 +92,9 @@ body { background: var(--surface-page); font-family: var(--font-body); font-size
   background: transparent; border: 0; border-radius: 0;
   box-shadow: none !important;
 }
+
+/* inside a dialog the table does sit on the panel colour */
+.modal { --scroll-cover: var(--surface-panel); --scroll-cover-fade: var(--panel-fade); }
 
 /* chart tooltips reuse .card, so they need their surface back */
 .card.chart-tip {

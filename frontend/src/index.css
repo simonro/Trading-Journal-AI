@@ -756,8 +756,10 @@ summary:focus-visible {
   position: relative;
   overflow-x: auto;
   background:
-    linear-gradient(to right, var(--surface-panel) 30%, var(--panel-fade)) left center,
-    linear-gradient(to left, var(--surface-panel) 30%, var(--panel-fade)) right center,
+    /* the covers hide the edge shadows until there is something to scroll; they must match
+       whatever is behind the table (V3 makes cards transparent, see --scroll-cover in v3.css) */
+    linear-gradient(to right, var(--scroll-cover, var(--surface-panel)) 30%, var(--scroll-cover-fade, var(--panel-fade))) left center,
+    linear-gradient(to left, var(--scroll-cover, var(--surface-panel)) 30%, var(--scroll-cover-fade, var(--panel-fade))) right center,
     radial-gradient(farthest-side at 0 50%, var(--edge-shadow), transparent) left center,
     radial-gradient(farthest-side at 100% 50%, var(--edge-shadow), transparent) right center;
   background-repeat: no-repeat;
@@ -1079,3 +1081,28 @@ button.month-card:active { transform: translateY(1px); }
 .theme-swatches i:first-child { flex-grow: 2.4; }
 .theme-name { font-weight: 600; color: var(--text-primary); font-size: var(--fs-body); }
 .theme-desc { font-size: var(--fs-small); color: var(--text-secondary); line-height: 1.4; }
+
+/* ---------- Trade View: row actions (move to account, delete) ---------- */
+.trade-actions-cell { width: 44px; text-align: right; padding-left: 0; }
+.trade-actions-btn { color: var(--text-secondary); }
+.trade-actions-btn:hover, .trade-actions-btn[aria-expanded="true"] { color: var(--text-primary); background: var(--surface-hover); }
+.trade-actions-menu {
+  position: fixed; z-index: 950; width: 200px; padding: var(--space-1) 0;
+  background: var(--surface-panel); border: 1px solid var(--divider);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-dropdown);
+}
+.trade-actions-menu button {
+  display: flex; align-items: center; gap: var(--space-2); width: 100%;
+  padding: var(--space-2) var(--space-3); background: none; border: 0; text-align: left;
+  font-size: var(--fs-small); color: var(--text-primary);
+}
+.trade-actions-menu button:hover, .trade-actions-menu button:focus-visible { background: var(--surface-hover); outline: none; }
+.trade-actions-menu button:focus-visible { box-shadow: inset 2px 0 0 var(--accent-line); }
+.trade-actions-menu button.danger { color: var(--result-neg); }
+.trade-action-dialog { width: 460px; text-align: left; white-space: normal; cursor: auto; }
+.trade-action-text { margin: var(--space-3) 0 var(--space-4); color: var(--text-primary); line-height: 1.5; }
+.trade-action-hint { margin: var(--space-3) 0; font-size: var(--fs-small); color: var(--text-secondary); line-height: 1.5; }
+.trade-action-buttons { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+/* the table takes focus after a delete; show it only for keyboard users */
+.trades-panel:focus { outline: none; }
+.trades-panel:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }

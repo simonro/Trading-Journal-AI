@@ -35,6 +35,7 @@ export const tradesApi = {
   create: (data) => api.post('/api/trades', data),
   update: (id, data) => api.put(`/api/trades/${id}`, data),
   delete: (id) => api.delete(`/api/trades/${id}`),
+  moveAccount: (id, accountId) => api.patch(`/api/trades/${id}/account`, { account_id: accountId }),
   // Notes and tags are per account: two accounts can share a trade_group name.
   getAnalysis: (group, accountId) =>
     api.get(`/api/trades/${encodeURIComponent(group)}/analysis`, { params: { account_id: accountId } }),

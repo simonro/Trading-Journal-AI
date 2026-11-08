@@ -931,6 +931,59 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     return {"deleted": True, "id": trade_id}
 
 
+class TradeAccountMove(BaseModel):
+    account_id: int
+
+
+@app.patch("/api/trades/{trade_id}/account")
+def move_trade(trade_id: int, body: TradeAccountMove, conn: sqlite3.Connection = Depends(get_connection)):
+    """Move a trade to another account. Its notes and tags go with it, since both are keyed by
+    (trade_group, account_id). A trade with the same name already in the target account is a
+    clash: the move is refused and nothing changes.
+
+    - Notes or tags in the target account under this name with no trade behind them (left by a
+      re-import that renamed a trade) cannot be opened anywhere; they are cleared so the moved
+      trade does not inherit them, and the reply counts them.
+    - The notes lose their link to the old account's diary entry, as an account delete does."""
+    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    trade = row_to_dict(row)
+    src, dst = trade['account_id'], body.account_id
+    target = conn.execute("SELECT name FROM accounts WHERE id=?", (dst,)).fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if dst == src:
+        raise HTTPException(status_code=400, detail="The trade is already in that account.")
+
+    group = trade['trade_group']
+    clash = conn.execute("SELECT id, ticker, date FROM trades WHERE trade_group=? AND account_id=?",
+                         (group, dst)).fetchone()
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{target['name']} already has a {clash['ticker']} trade on {clash['date']} with "
+                    f"the same name ({group}). Move or delete that trade first."))
+
+    try:
+        cleared = 0
+        for table in ("trade_analysis", "trade_tags"):
+            cleared += conn.execute(f"DELETE FROM {table} WHERE trade_group=? AND account_id=?",
+                                    (group, dst)).rowcount
+        conn.execute("UPDATE trade_analysis SET diary_entry_id=NULL WHERE trade_group=? AND account_id=?",
+                     (group, src))
+        for table in ("trade_analysis", "trade_tags"):
+            conn.execute(f"UPDATE {table} SET account_id=? WHERE trade_group=? AND account_id=?",
+                         (dst, group, src))
+        conn.execute("UPDATE trades SET account_id=? WHERE id=?", (dst, trade_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"moved": True, "id": trade_id, "account_id": dst, "account_name": target['name'],
+            "cleared_leftovers": cleared}
+
+
 def _trade_for_group(conn, trade_group: str, account_id: int | None):
     """The trade a review endpoint is about. trade_group names are not unique across
     accounts, so callers pass account_id; without it the name must belong to one account."""

@@ -70,6 +70,8 @@ jest.mock('./api', () => {
       getAnalysis: fn(() => ok(null)),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
       listCustomSetups: fn(() => ok([])),
+      delete: fn(() => ok({ deleted: true })),
+      moveAccount: fn(() => ok({ moved: true })),
     }),
     kpisApi: withDefault({ get: fn(() => ok({ total_net_pnl: 100, daily_pnl: [], by_strategy: [] })) }),
     importApi: withDefault({}),
@@ -229,6 +231,74 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   await act(async () => {});
 });
 
+test('Trade View row gear moves a trade to another account and deletes one, without opening it', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  const gear = await screen.findByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ });
+
+  fireEvent.click(gear);
+  expect(gear).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: /Move to account/ }));
+  const move = await screen.findByRole('dialog', { name: 'Move trade to another account' });
+  // The trade's own account is not offered as a target.
+  expect(within(move).getByRole('combobox', { name: 'Move to' })).toHaveDisplayValue('Swing');
+  const listCalls = tradesApi.list.mock.calls.length;
+  fireEvent.click(within(move).getByRole('button', { name: 'Move trade' }));
+  await waitFor(() => expect(tradesApi.moveAccount).toHaveBeenCalledWith(101, 2));
+  await waitFor(() => expect(tradesApi.list.mock.calls.length).toBeGreaterThan(listCalls));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  const del = await screen.findByRole('dialog', { name: 'Delete this trade?' });
+  fireEvent.click(within(del).getByRole('button', { name: 'Cancel' }));
+  expect(tradesApi.delete).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  fireEvent.click(within(await screen.findByRole('dialog', { name: 'Delete this trade?' })).getByRole('button', { name: 'Delete trade' }));
+  await waitFor(() => expect(tradesApi.delete).toHaveBeenCalledWith(101));
+  // None of this opened the trade.
+  expect(screen.queryByRole('tablist', { name: 'Trade review sections' })).not.toBeInTheDocument();
+});
+
+test('a refused move shows the reason and keeps the dialog open', async () => {
+  tradesApi.moveAccount.mockImplementation(() => Promise.reject({
+    response: { data: { detail: 'Swing already has a TSLA trade on 2026-09-10 with the same name.' } } }));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  fireEvent.click(await screen.findByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Move to account/ }));
+  const move = await screen.findByRole('dialog', { name: 'Move trade to another account' });
+  fireEvent.click(within(move).getByRole('button', { name: 'Move trade' }));
+  expect(await within(move).findByRole('alert')).toHaveTextContent('Swing already has a TSLA trade');
+  expect(screen.getByRole('dialog', { name: 'Move trade to another account' })).toBeInTheDocument();
+});
+
+test('deleting the only trade on the last page goes back a page instead of showing none', async () => {
+  // 26 trades: page 2 holds one. After the delete the list has 25 and page 2 no longer exists.
+  const many = Array.from({ length: 26 }, (_, i) => ({
+    id: 500 + i, account_id: 1, trade_group: `9/10/26_T${i}_STOCK_1`, date: '2026-09-10', ticker: `T${i}`,
+    instrument_type: 'STOCK', side: 'LONG', gross_pnl: 10, net_pnl: 10, commissions: 0,
+    executions: [{ date: '2026-09-10', time: `09:${String(10 + i).padStart(2, '0')}:00`, action: 'BOT', qty: 1, price: 1 }],
+  }));
+  let current = many;
+  tradesApi.list.mockImplementation(() => Promise.resolve({ data: current }));
+  tradesApi.delete.mockImplementation((id) => { current = current.filter(t => t.id !== id); return Promise.resolve({ data: { deleted: true } }); });
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  fireEvent.click(await screen.findByRole('button', { name: /Next/ }));
+  expect(await screen.findByText(/Page 2 of 2/)).toBeInTheDocument();
+  const gear = screen.getAllByRole('button', { name: /^Actions for T\d+ on 2026-09-10/ });
+  expect(gear).toHaveLength(1);
+  fireEvent.click(gear[0]);
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  fireEvent.click(within(await screen.findByRole('dialog', { name: 'Delete this trade?' })).getByRole('button', { name: 'Delete trade' }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /^Actions for T\d+ on 2026-09-10/ })).toHaveLength(25));
+  expect(screen.queryByText(/No trades found/)).not.toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Trades' })).toHaveFocus();
+});
+
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
@@ -320,7 +390,7 @@ test('Settings has General, Strategies, Sources, Tags and Appearance sections, a
 
 test('Settings > Appearance switches the theme and remembers it in this browser', async () => {
   await renderApp();
-  fireEvent.click(within(nav()).getByRole('button', { name: 'Settings' }));
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Appearance' }));
   const group = await screen.findByRole('radiogroup', { name: 'Theme' });
