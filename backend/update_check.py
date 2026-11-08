@@ -26,7 +26,9 @@ REPO = "simonro/Trading-Journal-AI"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
 VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
-CACHE = Path(__file__).resolve().parent / "update_check.json"
+# Docker keeps the cache in its data volume (UPDATE_CHECK_CACHE), so a restarted container still asks
+# at most once a day.
+CACHE = Path(os.getenv("UPDATE_CHECK_CACHE") or Path(__file__).resolve().parent / "update_check.json")
 DAY = 86400
 RETRY_AFTER_FAIL = 3600  # a failed check (offline, rate limited) is retried after an hour, not every start
 TIMEOUT = 3.0
@@ -45,6 +47,21 @@ def parse_version(v: str) -> tuple[int, ...]:
     """'v1.2.3' -> (1, 2, 3). Anything unparsable is (0,), older than everything."""
     m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", (v or "").strip())
     return tuple(int(x) for x in m.groups()) if m else (0,)
+
+
+def install_kind() -> str:
+    """"docker" inside the image (its Dockerfile sets JOURNAL_INSTALL), "local" otherwise. It only
+    picks which update steps the notice shows."""
+    return "docker" if os.getenv("JOURNAL_INSTALL", "").strip().lower() == "docker" else "local"
+
+
+UPDATE_STEPS = {
+    "local": "To update: git pull, then run setup.bat (setup.sh on Mac or Linux). Downloaded the ZIP?\n"
+             "Unzip the new version and copy backend/.env, backend/trading_journal.db and the\n"
+             "backend/uploads folder into it.",
+    "docker": "To update: git pull, then docker compose up -d --build. Your trades stay in the\n"
+              "journal-data volume.",
+}
 
 
 def enabled() -> bool:
@@ -73,7 +90,8 @@ def _fetch() -> dict | None:
 def check(now: float | None = None, cache: Path = CACHE, fetch=_fetch, current: str | None = None) -> dict:
     """{"current", "latest", "available", "url"}. Uses a cached answer younger than a day. Never raises."""
     current = current or current_version()
-    result = {"current": current, "latest": None, "available": False, "url": RELEASES_PAGE}
+    result = {"current": current, "latest": None, "available": False, "url": RELEASES_PAGE,
+              "install": install_kind()}
     if not enabled():
         return result
     now = time.time() if now is None else now
@@ -118,7 +136,7 @@ def status() -> dict:
         if _state is not None:
             return dict(_state, checked=True)
     return {"current": current_version(), "latest": None, "available": False, "url": RELEASES_PAGE,
-            "checked": not enabled()}
+            "install": install_kind(), "checked": not enabled()}
 
 
 def _run() -> None:
@@ -130,8 +148,7 @@ def _run() -> None:
         print(
             f"\nA newer Trading Journal AI release is available: v{result['latest']} (you run v{result['current']}).\n"
             f"Release notes: {result['url']}\n"
-            "To update: git pull, then run setup.bat. Downloaded the ZIP? Unzip the new version and copy\n"
-            "backend/.env, backend/trading_journal.db and the backend/uploads folder into it.\n"
+            f"{UPDATE_STEPS[result.get('install', 'local')]}\n"
             "Turn this check off with UPDATE_CHECK=0.\n",
             flush=True,
         )

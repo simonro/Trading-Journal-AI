@@ -1,0 +1,23 @@
+# Never send secrets, journals or build output into an image.
+.git
+.github
+**/node_modules
+frontend/build
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.bak
+**/*.bak-*
+uploads
+backend/uploads
+backend/tests
+backend/update_check.json
+docs
+scripts
+*.lnk

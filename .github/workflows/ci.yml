@@ -58,3 +58,37 @@ jobs:
       - name: Run frontend tests
         working-directory: frontend
         run: npx craco test --watchAll=false
+
+  docker:
+    name: Docker Install
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build and start
+        run: docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Smoke test
+        run: |
+          curl -sf http://localhost:8010/api/update | grep -q '"install":"docker"'
+          curl -sf http://localhost:3010 | grep -q '<title>Trading Journal AI</title>'
+          ACC=$(curl -sf -X POST http://localhost:8010/api/accounts -H 'Content-Type: application/json'             -d '{"name":"CI","type":"day_trading","color":"#3b82f6","broker":"thinkorswim"}')
+          ID=$(echo "$ACC" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          curl -sf -X POST http://localhost:8010/api/import-csv -F account_id=$ID             -F file=@scripts/sample_import.csv | grep -q '"imported":4'
+
+      - name: Data survives a restart
+        run: |
+          docker compose down
+          docker compose up -d --wait --wait-timeout 120
+          curl -sf "http://localhost:8010/api/trades?account_id=1" | python3 -c             "import sys, json; d = json.load(sys.stdin); assert len(d) == 4, d"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
+

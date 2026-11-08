@@ -1,1 +1,5 @@
 *.bat text eol=crlf
+*.sh text eol=lf
+docker/** text eol=lf
+docker-compose.yml text eol=lf
+.dockerignore text eol=lf

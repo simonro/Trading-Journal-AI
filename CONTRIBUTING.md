@@ -24,7 +24,9 @@ These decide most review questions, so they are worth knowing before you start:
 
 Requirements: Python 3.11+ and Node.js 18+ (CI uses Node 24).
 
-On Windows, run `setup.bat` once and `launch.bat` to start. By hand:
+Run `setup.bat` once and `launch.bat` to start (on Mac/Linux: `bash setup.sh` and `bash launch.sh`).
+Docker (`docker compose up -d`) is for running the app, not for working on it: it needs a rebuild after
+every change. By hand:
 
 ```bash
 python -m venv .venv

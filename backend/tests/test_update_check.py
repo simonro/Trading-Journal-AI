@@ -26,11 +26,13 @@ def test_version_file_is_the_source_of_truth():
     assert version == (Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()
 
 
-def test_newer_release_is_reported_and_cached(tmp_path):
+def test_newer_release_is_reported_and_cached(tmp_path, monkeypatch):
+    monkeypatch.delenv("JOURNAL_INSTALL", raising=False)
     cache = tmp_path / "update_check.json"
     r = update_check.check(now=NOW, cache=cache, fetch=release("v1.6.0"), current="1.5.0")
     assert r == {"current": "1.5.0", "latest": "1.6.0", "available": True,
-                 "url": "https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0"}
+                 "url": "https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.6.0",
+                 "install": "local"}
     assert json.loads(cache.read_text())["checked"] == NOW
 
 
@@ -122,3 +124,28 @@ def test_api_endpoint_answers_without_a_check(monkeypatch):
         body = client.get("/api/update").json()
     assert body["available"] is False
     assert body["current"] == update_check.current_version()
+
+
+def test_install_kind_picks_the_update_steps(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(update_check, "_state", None)
+    monkeypatch.delenv("JOURNAL_INSTALL", raising=False)
+    assert update_check.check(now=NOW, cache=tmp_path / "d.json", fetch=release("v1.6.0"),
+                              current="1.5.0")["install"] == "local"
+    monkeypatch.setenv("JOURNAL_INSTALL", "docker")
+    assert update_check.status()["install"] == "docker"
+    monkeypatch.setattr(update_check, "check", lambda: {
+        "current": "1.5.0", "latest": "1.6.0", "available": True,
+        "url": update_check.RELEASES_PAGE, "install": "docker"})
+    update_check._run()
+    assert "docker compose up -d --build" in capsys.readouterr().out
+
+
+def test_cache_path_can_live_in_the_docker_volume(tmp_path, monkeypatch):
+    import importlib
+    target = tmp_path / "data" / "update_check.json"
+    monkeypatch.setenv("UPDATE_CHECK_CACHE", str(target))
+    try:
+        assert importlib.reload(update_check).CACHE == target
+    finally:
+        monkeypatch.delenv("UPDATE_CHECK_CACHE")
+        importlib.reload(update_check)
