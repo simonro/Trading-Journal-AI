@@ -2,9 +2,9 @@
 
 The dark redesign (September 2026), with selectable themes since November 2026. Token names are
 defined in `:root` in `frontend/src/index.css`; `frontend/src/v3.css` (loaded after it) overrides
-their values for the V3 look, which is the **Current** theme; `frontend/src/themes.css` holds the
+their values for the V3 look, which is the **Original** theme; `frontend/src/themes.css` holds the
 other themes (see [Themes](#themes)). Components reference tokens, never raw values. The values in
-the tables below are the `index.css` originals; read `v3.css :root` for what Current shows today.
+the tables below are the `index.css` originals; read `v3.css :root` for what Original shows.
 
 ## Tokens
 
@@ -43,11 +43,11 @@ Sell fill markers keep green and red because they are execution annotations. Cou
 (mistake frequency) use `--caution`, not the loss colour, since they are not a P&L result.
 
 ### Type
-In Current, `--font-body` is Inter, `--font-display` is Bricolage Grotesque and `--font-mono` is
+In Original, `--font-body` is Inter, `--font-display` is Bricolage Grotesque and `--font-mono` is
 IBM Plex Mono (prices, times and executions only). Themes swap all three. Sizes: page title 30,
 section 19, body 15, small 13, caption 12, KPI value 28.
 
-Numbers use tabular figures (`.num`) and explicit signs. `index.html` loads the Current fonts plus
+Numbers use tabular figures (`.num`) and explicit signs. `index.html` loads the Original fonts plus
 one stylesheet for the theme fonts (Public Sans, Source Serif 4, Source Sans 3, JetBrains Mono,
 IBM Plex Sans Condensed).
 
@@ -112,12 +112,12 @@ identical in every theme.
 
 | Theme | Mode | Fonts | Signature |
 |---|---|---|---|
-| Current | dark | Inter, Bricolage Grotesque, IBM Plex Mono | Navy and amber, caps labels. The default |
+| Original | dark | Inter, Bricolage Grotesque, IBM Plex Mono | Navy and amber, caps labels. The default |
 | Minimal | light | Public Sans only | Black actions, hairlines, colour kept for results, black goal marks |
 | Natural | light | Source Serif 4, Source Sans 3 | Warm paper with grain, plum actions |
 | Pro terminal | dark | JetBrains Mono, IBM Plex Sans Condensed | True black, square, amber heads, step equity line, slashed zeros |
 
-**How it works.** `<html data-theme="minimal|natural|terminal">`; no attribute is Current.
+**How it works.** `<html data-theme="minimal|natural|terminal">`; no attribute is Original.
 `public/index.html` applies the saved theme before the bundle runs, so a light theme never flashes
 dark. `src/theme.js` lists the themes and sets or clears the attribute. Charts read tokens when
 they mount, and the page remounts when you leave Settings, so no chart listens for a theme change.
@@ -128,7 +128,7 @@ Raw colour outside `:root` blocks has two deliberate exceptions: the swatches in
 (`src/theme.js`), which must show other themes' colours, and the browser-bar colour map in the
 inline script in `public/index.html`. Keep both in step with `themes.css`.
 
-**Theme hooks** (in `v3.css :root`, defaults = Current): `--display-weight`, `--kpi-weight`,
+**Theme hooks** (in `v3.css :root`, defaults = Original): `--display-weight`, `--kpi-weight`,
 `--display-tracking` (multiplier on the tight display letter-spacing), `--goal`, `--curve-line`,
 `--curve-fill-top`, `--curve-w`, `--chart-dd-opacity`, `--peak-line`, `--hero-glow-a/-b`,
 `--shadow-tip/-gtip/-pop`, `--chart-crosshair-line/-label`, `--logo-a/-b`, `--cal-tint-scale`.

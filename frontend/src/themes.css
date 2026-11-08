@@ -1,5 +1,5 @@
 /* =========================================================================
-   Themes. <html data-theme="minimal|natural|terminal">; no attribute = Current.
+   Themes. <html data-theme="minimal|natural|terminal">; no attribute = Original.
    A theme only overrides token VALUES (raw colour lives only in these token
    blocks) plus a few scoped rules for its signature. Layout never changes.
    How to add one: docs/DESIGN.md, "Themes".
@@ -201,7 +201,7 @@
 
 /* ---------- scoped signature rules (tokens only) ---------- */
 
-/* Minimal and Natural read labels in sentence case; Current and Terminal keep caps */
+/* Minimal and Natural read labels in sentence case; Original and Terminal keep caps */
 :root[data-theme="minimal"] :is(.eyebrow, .v3-lab, .v3-acct, .v3-peak, table.v3-t thead th, .v3-side, .v3-thin,
   .v3-dow, .v3-wk .l, .v3-pop-custom label, .xl-actual-line dt),
 :root[data-theme="natural"] :is(.eyebrow, .v3-lab, .v3-acct, .v3-peak, table.v3-t thead th, .v3-side, .v3-thin,
@@ -226,7 +226,7 @@
 }
 :root[data-theme="terminal"] table.v3-t :is(td, th) { padding-top: 6px; padding-bottom: 6px; }
 
-/* Logo: Current keeps the PNG; the other themes draw the mark in their own colours */
+/* Logo: Original keeps the PNG; the other themes draw the mark in their own colours */
 .app-brand-alt { display: none; }
 :root[data-theme] .app-brand-png { display: none; }
 :root[data-theme] .app-brand-alt { display: flex; }

@@ -378,8 +378,9 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-cal-tot b { font-family: var(--font-display); font-size: 17px; letter-spacing: -0.02em; margin-left: 8px; }
 .v3-cal {
   min-width: 560px; display: grid; grid-template-columns: repeat(5, 1fr) 108px;
-  grid-template-rows: auto; grid-auto-rows: minmax(78px, 1fr);
-  gap: 1px; background: var(--divider-soft); height: 100%;
+  grid-template-rows: auto; grid-auto-rows: minmax(100px, 1fr);
+  /* the calendar sets the height of the Today row; the right column scrolls inside it */
+  gap: 1px; background: var(--divider-soft); height: 100%; max-height: 780px;
 }
 .v3-dow { background: var(--surface-page); padding: 0 0 9px; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-tertiary); }
 .v3-dow:last-child { text-align: right; }
@@ -519,6 +520,21 @@ table.v3-t tbody tr.thin td { opacity: 0.6; }
 .v3-rightcol { display: flex; flex-direction: column; }
 .v3-rightcol > :first-child { flex: 0 0 auto; }
 .v3-subband { margin-top: 22px; }
+/* Recent trades and Open positions scroll instead of growing the page; their headers stay put */
+.v3-rightcol > * { display: flex; flex-direction: column; min-height: 0; }
+.v3-rightcol .v3-scroll { overflow-y: auto; min-height: 0; }
+.v3-rightcol table.v3-t thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-page); }
+@media (min-width: 1101px) {
+  /* beside the calendar: the column takes the calendar's height and never sets it */
+  .v3-split > .v3-rightcol { contain: size; }
+  .v3-rightcol > :first-child { flex: 0 1 auto; min-height: 150px; }
+  .v3-rightcol > .v3-subband { flex: 1 1 0; min-height: 180px; }
+  .v3-rightcol .v3-scroll { flex: 1 1 auto; }
+}
+@media (max-width: 1100px) {
+  /* stacked under the calendar: each list keeps a readable height of its own */
+  .v3-rightcol .v3-scroll { max-height: 420px; }
+}
 
 /* tabs should read as tabs before they are used, not only once selected */
 .v3-tab {

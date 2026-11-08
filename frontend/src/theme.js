@@ -6,7 +6,7 @@ export const STORAGE_KEY = 'journal-theme';
 export const THEMES = [
   {
     id: 'current',
-    name: 'Current',
+    name: 'Original',
     description: 'Navy and amber, the journal as it has always looked.',
     swatches: ['#0A0E12', '#F0A93B', '#37D399', '#FF4D5E'],
     browserColor: '#12161C',
@@ -51,7 +51,7 @@ export function getTheme() {
   }
 }
 
-/* Puts the theme on <html>. Current is the absence of the attribute. */
+/* Puts the theme on <html>. Original is the absence of the attribute. */
 export function applyTheme(id) {
   const theme = THEMES.find((t) => t.id === id) || THEMES[0];
   const root = document.documentElement;

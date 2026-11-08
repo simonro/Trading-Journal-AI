@@ -324,14 +324,14 @@ test('Settings > Appearance switches the theme and remembers it in this browser'
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   fireEvent.click(within(tablist).getByRole('tab', { name: 'Appearance' }));
   const group = await screen.findByRole('radiogroup', { name: 'Theme' });
-  expect(within(group).getByRole('radio', { name: /Current/ })).toBeChecked();
+  expect(within(group).getByRole('radio', { name: /Original/ })).toBeChecked();
 
   try {
     fireEvent.click(within(group).getByRole('radio', { name: /Natural/ }));
     expect(document.documentElement.getAttribute('data-theme')).toBe('natural');
     expect(window.localStorage.getItem('journal-theme')).toBe('natural');
 
-    fireEvent.click(within(group).getByRole('radio', { name: /Current/ }));
+    fireEvent.click(within(group).getByRole('radio', { name: /Original/ }));
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
     expect(window.localStorage.getItem('journal-theme')).toBeNull();
   } finally {
