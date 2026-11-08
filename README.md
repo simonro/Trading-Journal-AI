@@ -246,6 +246,11 @@ or delete one and reassign its trades.
 
 ![Settings: the strategy, source and tag library with rename, merge and delete](docs/screenshot-settings.png)
 
+**Themes.** Settings > Appearance switches the whole app between four looks: Original, Minimal,
+Natural and Pro terminal. Only colors, fonts and chart style change; every page keeps its layout.
+
+![The dashboard in the four themes: Original, Minimal, Natural and Pro terminal](docs/screenshot-themes.png)
+
 ## Quick start
 
 Requirements: [Python 3.11+](https://www.python.org/downloads/) and [Node.js 18+](https://nodejs.org/) (the current LTS is recommended).
