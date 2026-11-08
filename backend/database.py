@@ -156,6 +156,7 @@ def init_db():
         "ALTER TABLE trades ADD COLUMN mfe_pct REAL",
         "ALTER TABLE trades ADD COLUMN mae_pct REAL",
         "ALTER TABLE trades ADD COLUMN exit_efficiency REAL",
+        "ALTER TABLE accounts ADD COLUMN import_timezone TEXT",
     ]:
         try:
             conn.execute(ddl)

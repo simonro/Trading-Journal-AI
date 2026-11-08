@@ -201,7 +201,7 @@ const FEATURES = [
   {
     name: 'Import',
     icon: '📤',
-    description: 'CSV importer for Thinkorswim account statements and Interactive Brokers (IBKR) Activity Statements. Pick the broker from the dropdown (or leave Auto-detect). Automatically parses executions, groups them into trades, and detects duplicates on re-import. See the README for a Claude Code prompt that adds any other broker.',
+    description: 'CSV importer for Schwab (Thinkorswim) account statements, Interactive Brokers (IBKR) Activity Statements, Tradovate Orders, NinjaTrader Executions, TopstepX trades and Webull order history (stocks and options), and any other broker through the generic template. A file holding several broker accounts asks which one to import; for Tradovate, NinjaTrader, TopstepX and Webull you pick the timezone of the times in the file, and the account remembers it. Pick the broker from the dropdown (or leave Auto-detect). Automatically parses executions, groups them into trades, and detects duplicates on re-import.',
     tips: [
       'Re-importing a file is safe - duplicates are detected by trade group and skipped.',
       'If you deleted a bad trade and need to re-import it, the re-import will restore it cleanly.',

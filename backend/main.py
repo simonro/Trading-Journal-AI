@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 import httpx
 
 from database import init_db, get_db, row_to_dict, in_marks, DB_PATH
-from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
+from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
+from broker_formats import SourceAccountsError, DEFAULT_TIMEZONE, SPEC_BY_KEY
+from zoneinfo import ZoneInfo
 from ai_analysis import (
     analyze_diary_entry,
     analyze_diary_text,
@@ -114,6 +116,12 @@ def _summary_cache_key(key: str, account_id: list[int] | None) -> tuple[str, int
 
 
 # ── Exception handlers ─────────────────────────────────────────────────────────
+
+@app.exception_handler(SourceAccountsError)
+async def source_accounts_handler(request, exc):
+    # 409 with the accounts, so the Import page can ask which one to bring in.
+    return JSONResponse(status_code=409, content={"error": str(exc), "source_accounts": exc.accounts})
+
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request, exc):
@@ -531,15 +539,25 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
 async def import_csv(
     account_id: int = Form(...),
     file: UploadFile = File(...),
-    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'auto' (sniff the file)
+    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'generic' | 'tradovate' | 'ninjatrader' | 'topstepx' | 'webull' | 'auto'
+    timezone: str = Form(''),      # IANA zone of the file's times (Tradovate, NinjaTrader, TopstepX, Webull)
+    source_account: str = Form(''),  # which broker account to take from a file holding several
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise ValueError("Only .csv files are accepted")
 
-    account = conn.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+    account = conn.execute("SELECT id, import_timezone FROM accounts WHERE id=?", (account_id,)).fetchone()
     if not account:
         raise ValueError(f"Account {account_id} not found")
+
+    # The zone is kept per account: re-importing with another zone would shift every
+    # time, so the same fills would no longer be recognised as duplicates.
+    zone = timezone.strip() or account['import_timezone'] or DEFAULT_TIMEZONE
+    try:
+        ZoneInfo(zone)
+    except Exception:
+        raise ValueError(f"Unknown timezone '{zone}'.")
 
     raw = await file.read()
     try:
@@ -547,10 +565,20 @@ async def import_csv(
     except UnicodeDecodeError:
         content = raw.decode('latin-1')
 
-    trades, skipped = parse_broker_csv(
-        content, broker, account_id, conn,
-        import_tz=get_app_settings(conn)["import_timezone"],
-    )
+    warnings: list[str] = []
+    trades, skipped = parse_broker_csv(content, broker, account_id, conn, timezone=zone,
+                                       source_account=source_account.strip() or None,
+                                       warnings=warnings,
+                                       import_tz=get_app_settings(conn)["import_timezone"])
+
+    # Only exports read with the zone save it: a Thinkorswim or IBKR file ignores it.
+    fmt = (broker or 'auto').strip().lower()
+    if fmt == 'auto':
+        fmt = detect_broker(content)
+    save_zone = fmt in SPEC_BY_KEY and timezone.strip() and zone != account['import_timezone']
+    if save_zone and account['import_timezone']:
+        warnings.append(f"The file timezone for this account changed from {account['import_timezone']} to "
+                        f"{zone}. Fills imported earlier with the old zone are not matched as duplicates.")
 
     imported = 0
     errors = []
@@ -584,6 +612,8 @@ async def import_csv(
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
+        if save_zone:
+            conn.execute("UPDATE accounts SET import_timezone=? WHERE id=?", (zone, account_id))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -593,6 +623,7 @@ async def import_csv(
         "imported": imported,
         "skipped": skipped,
         "errors": errors,
+        "warnings": warnings,
         "message": (f"Imported {imported} trade group(s). "
                     f"Skipped {skipped} duplicate execution(s)."),
     }
@@ -807,8 +838,10 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         if instrument == 'OPTION':
             multiplier = 100
         elif instrument == 'FUTURE':
+            # Longest root first, so /SIL is not read as /SI.
             multiplier = next(
-                (v for k, v in FUTURES_MULTIPLIERS.items() if ticker.upper().startswith(k.upper())), 1
+                (FUTURES_MULTIPLIERS[k] for k in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True)
+                 if ticker.upper().startswith(k.upper())), 1
             )
         else:
             multiplier = 1
