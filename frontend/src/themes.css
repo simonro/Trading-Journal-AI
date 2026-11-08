@@ -1,0 +1,232 @@
+/* =========================================================================
+   Themes. <html data-theme="minimal|natural|terminal">; no attribute = Original.
+   A theme only overrides token VALUES (raw colour lives only in these token
+   blocks) plus a few scoped rules for its signature. Layout never changes.
+   How to add one: docs/DESIGN.md, "Themes".
+   ========================================================================= */
+
+/* ---------- Minimal: black on near-white, hairlines, P&L is the only colour ---------- */
+:root[data-theme="minimal"] {
+  color-scheme: light;
+  --surface-page: #FAFAF9;
+  --surface-header: #FAFAF9;
+  --surface-panel: #FFFFFF;
+  --surface-control: #F1F1EF;
+  --surface-hover: #F3F3F1;
+  --surface-selected: #EAEAE7;
+  --surface-inset: #F4F4F3;
+  --text-primary: #111111;
+  --text-secondary: #555555;
+  --text-tertiary: #686868;
+  --divider: #E2E2DF;
+  --divider-soft: #EDEDEB;
+  --divider-strong: #CFCFCB;
+  --action-primary: #111111;
+  --action-primary-text: #FFFFFF;
+  --accent-line: #111111;
+  --accent-soft: rgba(17, 17, 17, 0.06);
+  --accent-line-soft: rgba(17, 17, 17, 0.18);
+  --accent-line-hover: rgba(17, 17, 17, 0.4);
+  --result-pos: #16794A;
+  --result-neg: #C42B2B;
+  --caution: #8A5A00;
+  --caution-soft: rgba(138, 90, 0, 0.1);
+  --caution-line: rgba(138, 90, 0, 0.35);
+  --pos-line: rgba(22, 121, 74, 0.3);
+  --neg-line: rgba(196, 43, 43, 0.3);
+  --scrim: rgba(17, 17, 17, 0.32);
+  --panel-fade: rgba(255, 255, 255, 0);
+  --edge-shadow: rgba(0, 0, 0, 0.12);
+  --cal-pos: #E3F0E7;
+  --cal-neg: #F8E2E2;
+  --level-target: #3557C8;
+  --font-body: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --shadow-card: none;
+  --shadow-dropdown: 0 1px 2px rgba(0, 0, 0, 0.06), 0 10px 28px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 18px 48px rgba(0, 0, 0, 0.14);
+  --shadow-tip: 0 10px 28px -12px rgba(0, 0, 0, 0.18);
+  --shadow-gtip: 0 10px 28px -12px rgba(0, 0, 0, 0.18);
+  --shadow-pop: 0 20px 48px -18px rgba(0, 0, 0, 0.2);
+  --hero-glow-a: transparent;
+  --hero-glow-b: transparent;
+  --display-weight: 400;
+  --kpi-weight: 400;
+  --display-tracking: 0.5;
+  --goal: #111111;
+  --curve-line: #111111;
+  --curve-fill-top: 0;
+  --curve-w: 1.5;
+  --chart-dd-opacity: 0.12;
+  --logo-a: #111111;
+  --logo-b: #111111;
+  --grain: none;
+  --chart-crosshair-line: #9A9A9A;
+  --chart-crosshair-label: #111111;
+  --cal-tint-scale: 0.5;   /* keeps P&L text on the strongest day tint at 4.5:1 */
+}
+
+/* ---------- Natural: warm paper, plum, a book serif ---------- */
+:root[data-theme="natural"] {
+  color-scheme: light;
+  --surface-page: #F3EEE4;
+  --surface-header: #F3EEE4;
+  --surface-panel: #FBF8F2;
+  --surface-control: #ECE7DC;
+  --surface-hover: #EFE9DE;
+  --surface-selected: #E6DFD1;
+  --surface-inset: #F2EDE3;
+  --text-primary: #2A2823;
+  --text-secondary: #5E594F;
+  --text-tertiary: #6A645A;
+  --divider: #DDD6C8;
+  --divider-soft: #E9E3D7;
+  --divider-strong: #CBC2B1;
+  --action-primary: #6A4C7A;
+  --action-primary-text: #FBF8F2;
+  --accent-line: #6A4C7A;
+  --accent-soft: rgba(106, 76, 122, 0.1);
+  --accent-line-soft: rgba(106, 76, 122, 0.28);
+  --accent-line-hover: rgba(106, 76, 122, 0.5);
+  --result-pos: #2A6A40;
+  --result-neg: #A9372B;
+  --caution: #8A5A12;
+  --caution-soft: rgba(138, 90, 18, 0.1);
+  --caution-line: rgba(138, 90, 18, 0.35);
+  --pos-line: rgba(42, 106, 64, 0.3);
+  --neg-line: rgba(169, 55, 43, 0.3);
+  --scrim: rgba(42, 40, 35, 0.35);
+  --panel-fade: rgba(251, 248, 242, 0);
+  --edge-shadow: rgba(60, 45, 20, 0.14);
+  --cal-pos: #DFE8D3;
+  --cal-neg: #F2DCD3;
+  --level-target: #3D5A8A;
+  --font-body: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Source Serif 4', Georgia, serif;
+  --font-mono: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-card: 0 2px 8px rgba(60, 45, 20, 0.06);
+  --shadow-dropdown: 0 10px 28px rgba(60, 45, 20, 0.14);
+  --shadow-modal: 0 18px 48px rgba(60, 45, 20, 0.2);
+  --shadow-tip: 0 12px 30px -12px rgba(60, 45, 20, 0.22);
+  --shadow-gtip: 0 12px 30px -12px rgba(60, 45, 20, 0.22);
+  --shadow-pop: 0 22px 52px -18px rgba(60, 45, 20, 0.25);
+  --hero-glow-a: rgba(106, 76, 122, 0.07);
+  --hero-glow-b: rgba(47, 115, 70, 0.05);
+  --display-weight: 600;
+  --kpi-weight: 600;
+  --display-tracking: 0.4;
+  --goal: #6A4C7A;
+  --curve-line: #2A6A40;
+  --curve-fill-top: 0.12;
+  --curve-w: 2;
+  --chart-dd-opacity: 0.11;
+  --logo-a: #6A4C7A;
+  --logo-b: #2A6A40;
+  --chart-crosshair-line: #A39C8E;
+  --chart-crosshair-label: #2A2823;
+  --cal-tint-scale: 0.5;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .35 0 0 0 0 .28 0 0 0 0 .18 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- Pro terminal: black, square, dense, amber ---------- */
+:root[data-theme="terminal"] {
+  color-scheme: dark;
+  --surface-page: #000000;
+  --surface-header: #000000;
+  --surface-panel: #0B0B0B;
+  --surface-control: #161616;
+  --surface-hover: #141414;
+  --surface-selected: #1F1F1F;
+  --surface-inset: #0E0E0E;
+  --text-primary: #E6E3DC;
+  --text-secondary: #A39E94;
+  --text-tertiary: #858076;
+  --divider: #262626;
+  --divider-soft: #1A1A1A;
+  --divider-strong: #333333;
+  --action-primary: #FFA028;
+  --action-primary-text: #000000;
+  --accent-line: #FFA028;
+  --accent-soft: rgba(255, 160, 40, 0.12);
+  --accent-line-soft: rgba(255, 160, 40, 0.3);
+  --accent-line-hover: rgba(255, 160, 40, 0.58);
+  --result-pos: #3FD68F;
+  --result-neg: #FF5A4F;
+  --caution: #FFA028;
+  --caution-soft: rgba(255, 160, 40, 0.12);
+  --caution-line: rgba(255, 160, 40, 0.35);
+  --pos-line: rgba(63, 214, 143, 0.3);
+  --neg-line: rgba(255, 90, 79, 0.34);
+  --scrim: rgba(0, 0, 0, 0.78);
+  --panel-fade: rgba(11, 11, 11, 0);
+  --edge-shadow: rgba(0, 0, 0, 0.7);
+  --cal-pos: #0B2219;
+  --cal-neg: #2A0D0B;
+  --level-target: #B794FF;
+  --font-body: 'IBM Plex Sans Condensed', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'JetBrains Mono', Consolas, ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', Consolas, ui-monospace, monospace;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --shadow-card: none;
+  --shadow-dropdown: 0 0 0 1px rgba(255, 160, 40, 0.25), 0 12px 30px rgba(0, 0, 0, 0.7);
+  --shadow-modal: 0 0 0 1px rgba(255, 160, 40, 0.3), 0 18px 48px rgba(0, 0, 0, 0.8);
+  --shadow-tip: 0 12px 30px -12px rgba(0, 0, 0, 0.9);
+  --shadow-gtip: 0 12px 30px -12px rgba(0, 0, 0, 0.9);
+  --shadow-pop: 0 22px 52px -18px rgba(0, 0, 0, 0.9);
+  --hero-glow-a: rgba(255, 160, 40, 0.06);
+  --hero-glow-b: transparent;
+  --display-weight: 700;
+  --kpi-weight: 600;
+  --display-tracking: 0.15;
+  --goal: #B794FF;
+  --curve-line: #FFA028;
+  --curve-fill-top: 0;
+  --curve-w: 1.25;
+  --chart-dd-opacity: 0.2;
+  --logo-a: #B794FF;
+  --logo-b: #3FD68F;
+  --grain: none;
+  --chart-crosshair-line: #5A5650;
+  --chart-crosshair-label: #FFA028;
+}
+
+/* ---------- scoped signature rules (tokens only) ---------- */
+
+/* Minimal and Natural read labels in sentence case; Original and Terminal keep caps */
+:root[data-theme="minimal"] :is(.eyebrow, .v3-lab, .v3-acct, .v3-peak, table.v3-t thead th, .v3-side, .v3-thin,
+  .v3-dow, .v3-wk .l, .v3-pop-custom label, .xl-actual-line dt),
+:root[data-theme="natural"] :is(.eyebrow, .v3-lab, .v3-acct, .v3-peak, table.v3-t thead th, .v3-side, .v3-thin,
+  .v3-dow, .v3-wk .l, .v3-pop-custom label, .xl-actual-line dt) {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Natural: paper grain on the page only, never behind data */
+:root[data-theme="natural"] body { background-image: var(--grain); }
+:root[data-theme="natural"] :is(.v3-money, .v3-m-val, .v3-head h1) { font-variation-settings: "opsz" 60; }
+
+/* Terminal: slashed zeros, flat type, amber section heads, denser rows */
+:root[data-theme="terminal"] :is(.v3-mono, .v3-disp, .v3-money, .v3-m-val, .v3-day .v, .v3-wk .v, .mono, .num) {
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+:root[data-theme="terminal"] :is(.v3-h, .v3-cal-month, .v3-tipbox .v, .v3-day .v, .v3-wk .v, .v3-cal-tot b) {
+  letter-spacing: 0;
+}
+:root[data-theme="terminal"] :is(.v3-h, .v3-cal-month) {
+  font-size: 14px; text-transform: uppercase; color: var(--accent-line);
+}
+:root[data-theme="terminal"] table.v3-t :is(td, th) { padding-top: 6px; padding-bottom: 6px; }
+
+/* Logo: Original keeps the PNG; the other themes draw the mark in their own colours */
+.app-brand-alt { display: none; }
+:root[data-theme] .app-brand-png { display: none; }
+:root[data-theme] .app-brand-alt { display: flex; }

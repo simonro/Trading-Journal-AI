@@ -26,6 +26,10 @@ export default function ReplayChart({ replay }) {
       width: root.clientWidth, height: 260,
       layout: { background: { color: token('--surface-inset') }, textColor: ink, fontFamily: css.getPropertyValue('--font-mono').trim(), fontSize: 11 },
       grid: { vertLines: { color: token('--divider-soft') }, horzLines: { color: token('--divider-soft') } },
+      crosshair: {
+        vertLine: { color: token('--chart-crosshair-line'), labelBackgroundColor: token('--chart-crosshair-label') },
+        horzLine: { color: token('--chart-crosshair-line'), labelBackgroundColor: token('--chart-crosshair-label') },
+      },
       rightPriceScale: { borderColor: token('--divider'), entireTextOnly: true, scaleMargins: { top: 0.2, bottom: 0.2 } },
       timeScale: { borderColor: token('--divider'), timeVisible: true, secondsVisible: false, tickMarkFormatter: t => clockTime(t * 1000) },
       localization: { timeFormatter: t => `${clockTime(t * 1000)} New York` },

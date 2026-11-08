@@ -16,8 +16,10 @@ from dotenv import load_dotenv
 
 import httpx
 
-from database import init_db, get_db, row_to_dict
-from csv_parser import parse_broker_csv, FUTURES_MULTIPLIERS
+from database import init_db, get_db, row_to_dict, in_marks, DB_PATH
+from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
+from broker_formats import SourceAccountsError, DEFAULT_TIMEZONE, SPEC_BY_KEY
+from zoneinfo import ZoneInfo
 from ai_analysis import (
     analyze_diary_entry,
     analyze_diary_text,
@@ -95,7 +97,31 @@ def get_connection():
         conn.close()
 
 
+def account_ids(account_id: str | None = Query(None)) -> list[int] | None:
+    """?account_id=1 or ?account_id=1,4. None means all accounts."""
+    if account_id is None or not account_id.strip():
+        return None
+    try:
+        return sorted({int(p) for p in account_id.split(",") if p.strip()}) or None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="account_id must be an id or a comma-separated list of ids")
+
+
+def _summary_cache_key(key: str, account_id: list[int] | None) -> tuple[str, int | None]:
+    """(summary_date, account_id) an AI summary is cached under. A set of several
+    accounts has no account row of its own, so its ids go into the key."""
+    if account_id and len(account_id) > 1:
+        return f"{key}|accounts={','.join(map(str, account_id))}", None
+    return key, account_id[0] if account_id else None
+
+
 # ── Exception handlers ─────────────────────────────────────────────────────────
+
+@app.exception_handler(SourceAccountsError)
+async def source_accounts_handler(request, exc):
+    # 409 with the accounts, so the Import page can ask which one to bring in.
+    return JSONResponse(status_code=409, content={"error": str(exc), "source_accounts": exc.accounts})
+
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request, exc):
@@ -269,6 +295,59 @@ def update_account(account_id: int, data: AccountUpdate, conn: sqlite3.Connectio
 
     row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
     return row_to_dict(row)
+
+
+@app.get("/api/accounts/{account_id}/usage")
+def account_usage(account_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    """What deleting this account would remove, for the confirmation dialog."""
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Account not found")
+    t = conn.execute("SELECT COUNT(*), MIN(date), MAX(date) FROM trades WHERE account_id=?",
+                     (account_id,)).fetchone()
+    diary = conn.execute("SELECT COUNT(*) FROM diary_entries WHERE account_id=?", (account_id,)).fetchone()[0]
+    return {"trades": t[0], "first_date": t[1], "last_date": t[2], "diary_entries": diary}
+
+
+@app.delete("/api/accounts/{account_id}")
+def delete_account(account_id: int, conn: sqlite3.Connection = Depends(get_connection)):
+    """Delete an account and everything recorded under it. The database is
+    backed up first, so a delete can be undone by restoring that file."""
+    if not conn.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Account not found")
+    if conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] <= 1:
+        raise ValueError("This is the only account. Create another one before deleting it.")
+
+    db = Path(DB_PATH)
+    backup = db.with_name(f"{db.stem}.backup-{datetime.now():%Y%m%d-%H%M%S}-predelete-account{account_id}.db")
+    dst = sqlite3.connect(backup)
+    try:
+        conn.backup(dst)
+    finally:
+        dst.close()
+
+    try:
+        trades = conn.execute("DELETE FROM trades WHERE account_id=?", (account_id,)).rowcount
+        # Notes and tags are keyed by (trade_group, account_id): another account's
+        # trade with the same name keeps its own.
+        notes = conn.execute("DELETE FROM trade_analysis WHERE account_id=?", (account_id,)).rowcount
+        conn.execute("DELETE FROM trade_tags WHERE account_id=?", (account_id,))
+        conn.execute("UPDATE trade_analysis SET diary_entry_id = NULL WHERE diary_entry_id IN "
+                     "(SELECT id FROM diary_entries WHERE account_id=?)", (account_id,))
+        diary = conn.execute("DELETE FROM diary_entries WHERE account_id=?", (account_id,)).rowcount
+        conn.execute("DELETE FROM daily_summaries WHERE account_id=?", (account_id,))
+        # AI summaries cached for a set of accounts that included this one (see _summary_cache_key)
+        for sid, key in conn.execute("SELECT id, summary_date FROM daily_summaries "
+                                     "WHERE account_id IS NULL AND summary_date LIKE '%|accounts=%'").fetchall():
+            if str(account_id) in key.rsplit("|accounts=", 1)[1].split(","):
+                conn.execute("DELETE FROM daily_summaries WHERE id=?", (sid,))
+        conn.execute("DELETE FROM settings WHERE account_id=?", (account_id,))
+        conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"ok": True, "trades": trades, "trade_notes": notes, "diary_entries": diary,
+            "backup": backup.name}
 
 
 @app.post("/api/accounts", status_code=201)
@@ -452,25 +531,38 @@ def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None
     for g in old_groups - new_keys:
         conn.execute("DELETE FROM trades WHERE trade_group=? AND account_id=?", (g, account_id))
     for g, target in moves.items():
-        has_own = conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=?", (target,)).fetchone()
+        has_own = conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=? AND account_id=?",
+                               (target, account_id)).fetchone()
         if not has_own:
-            conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=?", (target, g))
-            conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=?", (target, g))
+            conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=? AND account_id=?",
+                         (target, g, account_id))
+            conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=? AND account_id=?",
+                         (target, g, account_id))
 
 
 @app.post("/api/import-csv")
 async def import_csv(
     account_id: int = Form(...),
     file: UploadFile = File(...),
-    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'auto' (sniff the file)
+    broker: str = Form('auto'),   # 'thinkorswim' | 'ibkr' | 'generic' | 'tradovate' | 'ninjatrader' | 'topstepx' | 'webull' | 'auto'
+    timezone: str = Form(''),      # IANA zone of the file's times (Tradovate, NinjaTrader, TopstepX, Webull)
+    source_account: str = Form(''),  # which broker account to take from a file holding several
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     if not file.filename.lower().endswith('.csv'):
         raise ValueError("Only .csv files are accepted")
 
-    account = conn.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+    account = conn.execute("SELECT id, import_timezone FROM accounts WHERE id=?", (account_id,)).fetchone()
     if not account:
         raise ValueError(f"Account {account_id} not found")
+
+    # The zone is kept per account: re-importing with another zone would shift every
+    # time, so the same fills would no longer be recognised as duplicates.
+    zone = timezone.strip() or account['import_timezone'] or DEFAULT_TIMEZONE
+    try:
+        ZoneInfo(zone)
+    except Exception:
+        raise ValueError(f"Unknown timezone '{zone}'.")
 
     raw = await file.read()
     try:
@@ -478,10 +570,26 @@ async def import_csv(
     except UnicodeDecodeError:
         content = raw.decode('latin-1')
 
-    trades, skipped = parse_broker_csv(
-        content, broker, account_id, conn,
-        import_tz=get_app_settings(conn)["import_timezone"],
-    )
+    warnings: list[str] = []
+    trades, skipped = parse_broker_csv(content, broker, account_id, conn, timezone=zone,
+                                       source_account=source_account.strip() or None,
+                                       warnings=warnings,
+                                       import_tz=get_app_settings(conn)["import_timezone"])
+
+    # Only exports read with the zone save it: a Thinkorswim or IBKR file ignores it.
+    fmt = (broker or 'auto').strip().lower()
+    if fmt == 'auto':
+        fmt = detect_broker(content)
+    save_zone = fmt in SPEC_BY_KEY and timezone.strip() and zone != account['import_timezone']
+    if save_zone and account['import_timezone']:
+        warnings.append(f"The file timezone for this account changed from {account['import_timezone']} to "
+                        f"{zone}. Fills imported earlier with the old zone are not matched as duplicates.")
+    # Thinkorswim reads its own timezone from Settings > General; say so when the Import page
+    # zone picked for this file was a different one, instead of ignoring it silently.
+    tos_zone = get_app_settings(conn)["import_timezone"]
+    if fmt == 'thinkorswim' and timezone.strip() and zone != tos_zone:
+        warnings.append(f"Thinkorswim times were read as {tos_zone}, the timezone in Settings > General. "
+                        f"The {zone} picked on the Import page applies only to the beta broker exports.")
 
     imported = 0
     errors = []
@@ -515,6 +623,8 @@ async def import_csv(
             except Exception as e:
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
+        if save_zone:
+            conn.execute("UPDATE accounts SET import_timezone=? WHERE id=?", (zone, account_id))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -524,6 +634,7 @@ async def import_csv(
         "imported": imported,
         "skipped": skipped,
         "errors": errors,
+        "warnings": warnings,
         "message": (f"Imported {imported} trade group(s). "
                     f"Skipped {skipped} duplicate execution(s)."),
     }
@@ -573,7 +684,7 @@ def _is_open_position(trade: dict) -> bool:
 
 @app.get("/api/trades")
 def list_trades(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     instrument_type: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
@@ -586,14 +697,14 @@ def list_trades(
         SELECT t.*, ta.strategy, ta.stop_loss, ta.r_multiple, ta.match_confidence, ta.emotional_state,
                ta.entry_reason, ta.exit_reason, ta.ai_feedback, ta.mistakes, ta.notes as analysis_notes
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params = []
 
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if instrument_type:
         sql += " AND t.instrument_type = ?"
         params.append(instrument_type.upper())
@@ -678,11 +789,12 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
 
     if data.strategy or data.stop_loss or data.notes:
         conn.execute("""
-            INSERT INTO trade_analysis (trade_group, ticker, date, strategy, stop_loss, notes)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(trade_group) DO UPDATE SET
+            INSERT INTO trade_analysis (trade_group, account_id, ticker, date, strategy, stop_loss, notes)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(trade_group, account_id) DO UPDATE SET
                 strategy=excluded.strategy, stop_loss=excluded.stop_loss, notes=excluded.notes
-        """, (trade_group, data.ticker.upper(), data.date, data.strategy, data.stop_loss, data.notes))
+        """, (trade_group, data.account_id, data.ticker.upper(), data.date, data.strategy,
+              data.stop_loss, data.notes))
         conn.commit()
 
     row = conn.execute("SELECT * FROM trades WHERE id=?", (cursor.lastrowid,)).fetchone()
@@ -737,8 +849,10 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
         if instrument == 'OPTION':
             multiplier = 100
         elif instrument == 'FUTURE':
+            # Longest root first, so /SIL is not read as /SI.
             multiplier = next(
-                (v for k, v in FUTURES_MULTIPLIERS.items() if ticker.upper().startswith(k.upper())), 1
+                (FUTURES_MULTIPLIERS[k] for k in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True)
+                 if ticker.upper().startswith(k.upper())), 1
             )
         else:
             multiplier = 1
@@ -818,24 +932,96 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
         raise HTTPException(status_code=404, detail="Trade not found")
 
     trade = row_to_dict(row)
-    trade_group = trade['trade_group']
+    key = (trade['trade_group'], trade['account_id'])
 
-    conn.execute("DELETE FROM trade_tags WHERE trade_group=?", (trade_group,))
-    conn.execute("DELETE FROM trade_analysis WHERE trade_group=?", (trade_group,))
+    conn.execute("DELETE FROM trade_tags WHERE trade_group=? AND account_id=?", key)
+    conn.execute("DELETE FROM trade_analysis WHERE trade_group=? AND account_id=?", key)
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
     conn.commit()
 
     return {"deleted": True, "id": trade_id}
 
 
+class TradeAccountMove(BaseModel):
+    account_id: int
+
+
+@app.patch("/api/trades/{trade_id}/account")
+def move_trade(trade_id: int, body: TradeAccountMove, conn: sqlite3.Connection = Depends(get_connection)):
+    """Move a trade to another account. Its notes and tags go with it, since both are keyed by
+    (trade_group, account_id). A trade with the same name already in the target account is a
+    clash: the move is refused and nothing changes.
+
+    - Notes or tags in the target account under this name with no trade behind them (left by a
+      re-import that renamed a trade) cannot be opened anywhere; they are cleared so the moved
+      trade does not inherit them, and the reply counts them.
+    - The notes lose their link to the old account's diary entry, as an account delete does."""
+    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    trade = row_to_dict(row)
+    src, dst = trade['account_id'], body.account_id
+    target = conn.execute("SELECT name FROM accounts WHERE id=?", (dst,)).fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if dst == src:
+        raise HTTPException(status_code=400, detail="The trade is already in that account.")
+
+    group = trade['trade_group']
+    clash = conn.execute("SELECT id, ticker, date FROM trades WHERE trade_group=? AND account_id=?",
+                         (group, dst)).fetchone()
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{target['name']} already has a {clash['ticker']} trade on {clash['date']} with "
+                    f"the same name ({group}). Move or delete that trade first."))
+
+    try:
+        cleared = 0
+        for table in ("trade_analysis", "trade_tags"):
+            cleared += conn.execute(f"DELETE FROM {table} WHERE trade_group=? AND account_id=?",
+                                    (group, dst)).rowcount
+        conn.execute("UPDATE trade_analysis SET diary_entry_id=NULL WHERE trade_group=? AND account_id=?",
+                     (group, src))
+        for table in ("trade_analysis", "trade_tags"):
+            conn.execute(f"UPDATE {table} SET account_id=? WHERE trade_group=? AND account_id=?",
+                         (dst, group, src))
+        conn.execute("UPDATE trades SET account_id=? WHERE id=?", (dst, trade_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"moved": True, "id": trade_id, "account_id": dst, "account_name": target['name'],
+            "cleared_leftovers": cleared}
+
+
+def _trade_for_group(conn, trade_group: str, account_id: int | None):
+    """The trade a review endpoint is about. trade_group names are not unique across
+    accounts, so callers pass account_id; without it the name must belong to one account."""
+    if account_id is not None:
+        return conn.execute("SELECT trade_group, account_id, ticker, date FROM trades "
+                            "WHERE trade_group=? AND account_id=?", (trade_group, account_id)).fetchone()
+    rows = conn.execute("SELECT trade_group, account_id, ticker, date FROM trades WHERE trade_group=?",
+                        (trade_group,)).fetchall()
+    if len(rows) > 1:
+        raise HTTPException(status_code=409,
+                            detail="This trade name exists in several accounts. Pass account_id.")
+    return rows[0] if rows else None
+
+
 @app.get("/api/trades/{trade_group:path}/analysis")
-def get_trade_analysis(trade_group: str, conn: sqlite3.Connection = Depends(get_connection)):
+def get_trade_analysis(trade_group: str, account_id: int | None = Query(None),
+                       conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
+    if not trade:
+        return {"analysis": None, "tags": []}
+    key = (trade["trade_group"], trade["account_id"])
     analysis = conn.execute(
-        "SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)
+        "SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?", key
     ).fetchone()
 
     tags = conn.execute(
-        "SELECT * FROM trade_tags WHERE trade_group=?", (trade_group,)
+        "SELECT * FROM trade_tags WHERE trade_group=? AND account_id=?", key
     ).fetchall()
 
     return {
@@ -857,29 +1043,31 @@ class AnalysisUpdate(BaseModel):
 
 
 @app.patch("/api/trades/{trade_group:path}/analysis")
-def update_trade_analysis(trade_group: str, data: AnalysisUpdate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group, ticker, date FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+def update_trade_analysis(trade_group: str, data: AnalysisUpdate, account_id: int | None = Query(None),
+                          conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
+    key = (trade["trade_group"], trade["account_id"])
 
     updates = data.model_dump(exclude_unset=True)
 
-    existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
+    existing = conn.execute("SELECT id FROM trade_analysis WHERE trade_group=? AND account_id=?", key).fetchone()
     if not existing:
         conn.execute(
-            "INSERT INTO trade_analysis (trade_group, ticker, date) VALUES (?,?,?)",
-            (trade_group, trade["ticker"], trade["date"])
+            "INSERT INTO trade_analysis (trade_group, account_id, ticker, date) VALUES (?,?,?,?)",
+            key + (trade["ticker"], trade["date"])
         )
 
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
         conn.execute(
-            f"UPDATE trade_analysis SET {set_clause} WHERE trade_group=?",
-            list(updates.values()) + [trade_group]
+            f"UPDATE trade_analysis SET {set_clause} WHERE trade_group=? AND account_id=?",
+            list(updates.values()) + list(key)
         )
 
     conn.commit()
-    row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=?", (trade_group,)).fetchone()
+    row = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?", key).fetchone()
     return row_to_dict(row) if row else {}
 
 
@@ -889,13 +1077,14 @@ class TagCreate(BaseModel):
 
 
 @app.post("/api/trades/{trade_group:path}/tags", status_code=201)
-def add_trade_tag(trade_group: str, data: TagCreate, conn: sqlite3.Connection = Depends(get_connection)):
-    trade = conn.execute("SELECT trade_group FROM trades WHERE trade_group=?", (trade_group,)).fetchone()
+def add_trade_tag(trade_group: str, data: TagCreate, account_id: int | None = Query(None),
+                  conn: sqlite3.Connection = Depends(get_connection)):
+    trade = _trade_for_group(conn, trade_group, account_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
     cursor = conn.execute(
-        "INSERT INTO trade_tags (trade_group, tag_type, tag_value, source) VALUES (?,?,?,'manual')",
-        (trade_group, data.tag_type, data.tag_value)
+        "INSERT INTO trade_tags (trade_group, account_id, tag_type, tag_value, source) VALUES (?,?,?,?,'manual')",
+        (trade["trade_group"], trade["account_id"], data.tag_type, data.tag_value)
     )
     conn.commit()
     row = conn.execute("SELECT * FROM trade_tags WHERE id=?", (cursor.lastrowid,)).fetchone()
@@ -944,8 +1133,8 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
            "WHERE instrument_type='STOCK' AND mfe_pct IS NOT NULL "
            "AND net_pnl IS NOT NULL AND net_pnl <> 0")
     params = []
-    if account_id is not None:
-        sql += " AND account_id = ?"; params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"; params += account_id
     if date_from:
         sql += " AND date >= ?"; params.append(date_from)
     if date_to:
@@ -980,7 +1169,7 @@ def _excursion_kpis(conn, account_id=None, date_from=None, date_to=None) -> dict
 
 @app.get("/api/kpis")
 def get_kpis(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -988,9 +1177,9 @@ def get_kpis(
     sql = "SELECT * FROM trades WHERE 1=1"
     params = []
 
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND date >= ?"
         params.append(date_from)
@@ -1083,15 +1272,15 @@ def get_kpis(
                    ta.r_multiple as r_multiple,
                    t.account_id as account_id
             FROM trades t
-            LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+            LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
             WHERE t.net_pnl IS NOT NULL AND t.net_pnl != 0
         ) sub
         WHERE label IS NOT NULL
     """
     strat_params = []
-    if account_id is not None:
-        strategy_sql += " AND account_id = ?"
-        strat_params.append(account_id)
+    if account_id:
+        strategy_sql += f" AND account_id IN ({in_marks(account_id)})"
+        strat_params += account_id
     strategy_sql += " GROUP BY label ORDER BY total_pnl DESC"
 
     strat_rows = conn.execute(strategy_sql, strat_params).fetchall()
@@ -1230,14 +1419,14 @@ async def upload_diary(
 
 @app.get("/api/diary")
 def list_diary(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = "SELECT * FROM diary_entries WHERE 1=1"
     params = []
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     sql += " ORDER BY entry_date DESC"
 
     rows = conn.execute(sql, params).fetchall()
@@ -1256,14 +1445,14 @@ def list_diary(
 @app.delete("/api/diary/by-date/{date}")
 def delete_diary_by_date(
     date: str,
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     where = "entry_date=?"
     params: list = [date]
-    if account_id is not None:
-        where += " AND account_id=?"
-        params.append(account_id)
+    if account_id:
+        where += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     # trade_analysis.diary_entry_id points back here, so unlink first: the
     # analysis (including anything edited by hand) stays on the trade.
     conn.execute(
@@ -1437,7 +1626,7 @@ async def get_chart(
 
 @app.get("/api/calendar")
 def get_calendar(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     year: int | None = Query(None),
     month: int | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1445,9 +1634,9 @@ def get_calendar(
     sql = "SELECT date, net_pnl FROM trades WHERE 1=1"
     params = []
 
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
     if year and month:
         date_from = f"{year:04d}-{month:02d}-01"
         next_month_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -1473,9 +1662,9 @@ def get_calendar(
     # Which days have diary entries
     diary_sql = "SELECT entry_date FROM diary_entries WHERE 1=1"
     diary_params = []
-    if account_id is not None:
-        diary_sql += " AND account_id = ?"
-        diary_params.append(account_id)
+    if account_id:
+        diary_sql += f" AND account_id IN ({in_marks(account_id)})"
+        diary_params += account_id
     diary_rows = conn.execute(diary_sql, diary_params).fetchall()
     diary_dates = {r['entry_date'] for r in diary_rows}
 
@@ -1500,14 +1689,14 @@ def get_calendar(
 @app.get("/api/yearly-kpis")
 def get_yearly_kpis(
     year: int = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     sql = "SELECT date, net_pnl, gross_pnl FROM trades WHERE strftime('%Y', date) = ?"
     params = [str(year)]
-    if account_id is not None:
-        sql += " AND account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND account_id IN ({in_marks(account_id)})"
+        params += account_id
 
     rows = conn.execute(sql + " ORDER BY date", params).fetchall()
 
@@ -1634,7 +1823,7 @@ def _ordered(buckets, order):
 
 @app.get("/api/reports")
 def get_reports(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1643,19 +1832,19 @@ def get_reports(
     from collections import OrderedDict
 
     sql = """
-        SELECT t.id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
+        SELECT t.id, t.account_id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
                t.instrument_type, t.executions, t.setup, t.setup_grade,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.idea_source
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.net_pnl IS NOT NULL AND t.net_pnl <> 0
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1750,16 +1939,16 @@ def get_reports(
     # A trade with several tags counts once under each of them.
     tags_by_group = {}
     for tr in conn.execute(
-        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
+        "SELECT DISTINCT account_id, trade_group, tag_type, tag_value FROM trade_tags "
         "WHERE tag_type NOT IN ('strategy', 'source') AND TRIM(tag_value) <> ''"
     ).fetchall():
-        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+        tags_by_group.setdefault((tr['account_id'], tr['trade_group']), []).append((tr['tag_type'], tr['tag_value']))
     by_tag = {}
     for tag_type in ('setup', 'execution', 'mistake', 'emotion', 'outcome'):
         rows_for_type = [
             dict(r, _tag=value)
             for r in raw
-            for (t, value) in tags_by_group.get(r['trade_group'], [])
+            for (t, value) in tags_by_group.get((r['account_id'], r['trade_group']), [])
             if t == tag_type
         ]
         if rows_for_type:
@@ -1824,13 +2013,13 @@ def _leak_rows(conn, account_id, date_from, date_to):
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.emotional_state, ta.idea_source
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1842,12 +2031,12 @@ def _leak_rows(conn, account_id, date_from, date_to):
 
     tags_by_group = {}
     for tr in conn.execute(
-        "SELECT DISTINCT trade_group, tag_type, tag_value FROM trade_tags "
+        "SELECT DISTINCT account_id, trade_group, tag_type, tag_value FROM trade_tags "
         "WHERE tag_type IN ('mistake', 'emotion') AND TRIM(tag_value) <> ''"
     ).fetchall():
-        tags_by_group.setdefault(tr['trade_group'], []).append((tr['tag_type'], tr['tag_value']))
+        tags_by_group.setdefault((tr['account_id'], tr['trade_group']), []).append((tr['tag_type'], tr['tag_value']))
     for r in rows:
-        r['tags'] = tags_by_group.get(r['trade_group'], [])
+        r['tags'] = tags_by_group.get((r['account_id'], r['trade_group']), [])
         # The playbook setup name the trader tagged ('NONE' reads as 'No setup'), as in by_setup.
         r['setup_label'] = _SETUP_LABEL_MAP.get(r['setup'], r['setup']) if r['setup'] else None
     # derive over every trade so breakeven and open ones still count in the sequence, then keep
@@ -1857,7 +2046,7 @@ def _leak_rows(conn, account_id, date_from, date_to):
 
 @app.get("/api/leaks")
 def get_leaks(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1885,7 +2074,7 @@ def get_leaks(
 
 @app.get("/api/leaks/explain")
 def explain_leak_findings(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1930,7 +2119,7 @@ def explain_leak_findings(
 
 @app.get("/api/edge-report")
 def get_edge_report(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     conn: sqlite3.Connection = Depends(get_connection),
@@ -1939,13 +2128,13 @@ def get_edge_report(
         SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date, t.executions,
                ta.r_multiple, ta.emotional_state, ta.mistakes
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE 1=1
     """
     params: list = []
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     if date_from:
         sql += " AND t.date >= ?"
         params.append(date_from)
@@ -1961,13 +2150,13 @@ def get_edge_report(
     tag_sql = """
         SELECT tt.tag_value, COUNT(*) as cnt
         FROM trade_tags tt
-        JOIN trades t ON t.trade_group = tt.trade_group
+        JOIN trades t ON t.trade_group = tt.trade_group AND t.account_id = tt.account_id
         WHERE tt.tag_type = 'mistake'
     """
     tag_params: list = []
-    if account_id is not None:
-        tag_sql += " AND t.account_id = ?"
-        tag_params.append(account_id)
+    if account_id:
+        tag_sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        tag_params += account_id
     if date_from:
         tag_sql += " AND t.date >= ?"
         tag_params.append(date_from)
@@ -2162,7 +2351,7 @@ def get_edge_report(
 
 @app.get("/api/insights")
 def get_insights(
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
     # Reuse KPI data as input to insights. Pass explicit None for the date
@@ -2182,7 +2371,7 @@ def get_insights(
 @app.get("/api/weekly-summary")
 def get_weekly_summary(
     date: str = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
@@ -2193,12 +2382,12 @@ def get_weekly_summary(
     week_label = f"{week_start.strftime('%Y')}-W{week_start.strftime('%V')}"
     week_from = week_start.strftime("%Y-%m-%d")
     week_to = week_end.strftime("%Y-%m-%d")
-    cache_key = f"weekly_{week_label}"
+    cache_key, cache_acct = _summary_cache_key(f"weekly_{week_label}", account_id)
 
-    if not force and account_id is not None:
+    if not force and account_id:
         cached = conn.execute(
-            "SELECT ai_content FROM daily_summaries WHERE summary_date = ? AND account_id = ?",
-            (cache_key, account_id),
+            "SELECT ai_content FROM daily_summaries WHERE summary_date = ? AND account_id IS ?",
+            (cache_key, cache_acct),
         ).fetchone()
         if cached and cached[0]:
             try:
@@ -2211,13 +2400,13 @@ def get_weekly_summary(
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.entry_reason, ta.exit_reason
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.date >= ? AND t.date <= ?
     """
     params: list = [week_from, week_to]
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     sql += " ORDER BY t.date, t.id"
 
     rows = conn.execute(sql, params).fetchall()
@@ -2243,13 +2432,17 @@ def get_weekly_summary(
     result["week_from"] = week_from
     result["week_to"] = week_to
 
-    if account_id is not None:
+    if account_id:
         try:
+            if cache_acct is None:
+                # NULL never conflicts on UNIQUE, so clear the old row by hand.
+                conn.execute("DELETE FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL",
+                             (cache_key,))
             conn.execute(
                 """INSERT OR REPLACE INTO daily_summaries
                    (account_id, summary_date, ai_content, generated_at)
                    VALUES (?, ?, ?, ?)""",
-                (account_id, cache_key, json.dumps(result), datetime.now().isoformat()),
+                (cache_acct, cache_key, json.dumps(result), datetime.now().isoformat()),
             )
             conn.commit()
         except Exception:
@@ -2263,15 +2456,16 @@ def get_weekly_summary(
 @app.get("/api/daily-summary")
 def get_daily_summary(
     date: str = Query(...),
-    account_id: int | None = Query(None),
+    account_id: list[int] | None = Depends(account_ids),
     force: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
+    cache_key, cache_acct = _summary_cache_key(date, account_id)
     # Check cache first
     if not force:
         row = conn.execute(
             "SELECT ai_content, generated_at FROM daily_summaries WHERE summary_date = ? AND (account_id = ? OR (account_id IS NULL AND ? IS NULL))",
-            (date, account_id, account_id)
+            (cache_key, cache_acct, cache_acct)
         ).fetchone()
         if row:
             try:
@@ -2299,9 +2493,12 @@ def get_daily_summary(
             }
         raise HTTPException(status_code=500, detail=str(e))
 
+    if cache_acct is None:
+        # NULL never conflicts on UNIQUE, so clear the old row by hand.
+        conn.execute("DELETE FROM daily_summaries WHERE summary_date = ? AND account_id IS NULL", (cache_key,))
     conn.execute(
         "INSERT OR REPLACE INTO daily_summaries (summary_date, account_id, ai_content, generated_at) VALUES (?, ?, ?, datetime('now'))",
-        (date, account_id, json.dumps(summary))
+        (cache_key, cache_acct, json.dumps(summary))
     )
     conn.commit()
 
@@ -2321,7 +2518,8 @@ async def brain_chat(
 ):
     body = await req.json()
     messages = body.get("messages", [])
-    account_id = body.get("account_id")
+    raw = body.get("account_id")
+    account_id = account_ids(None if raw is None else str(raw))
 
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")

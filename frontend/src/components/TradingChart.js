@@ -26,6 +26,8 @@ function chartTheme() {
     vwap: cssVar('--text-secondary', '#96A4B6'),
     stop: cssVar('--caution', '#E9BA78'),
     target: cssVar('--accent-line', '#91A8FF'),
+    crossLine: cssVar('--chart-crosshair-line', '#758696'),
+    crossLabel: cssVar('--chart-crosshair-label', '#4C525E'),
   };
 }
 
@@ -195,7 +197,11 @@ export default function TradingChart({
         vertLines: { color: T.grid },
         horzLines: { color: T.grid },
       },
-      crosshair: { mode: CrosshairMode.Normal },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: T.crossLine, labelBackgroundColor: T.crossLabel },
+        horzLine: { color: T.crossLine, labelBackgroundColor: T.crossLabel },
+      },
       rightPriceScale: {
         borderColor: T.border,
         scaleMargins: { top: 0.1, bottom: 0.22 },

@@ -14,7 +14,9 @@ your days on process.
 - **The numbers are not AI.** Trade grouping, P&L, fees and statistics are plain code with tests.
   AI is an optional coaching layer on top.
 - **Stocks, options and futures**, with partial fills, scale-ins and shorts grouped automatically.
-- **Thinkorswim and Interactive Brokers** importers, plus a template for any other broker.
+- **Thinkorswim and Interactive Brokers** importers, seven more in beta (Tradovate, NinjaTrader,
+  TopstepX, Webull, tastytrade, TradeStation, Power E*TRADE), and a template for any other broker.
+- **Four looks**: Original, Minimal, Natural and Pro terminal, picked in Settings.
 - **Free and MIT licensed.** No paid tier.
 
 **[Quick start](#quick-start)** · **[Watch the walkthrough](https://www.youtube.com/watch?v=rsNizd9niG4)** · **[Releases](https://github.com/simonro/Trading-Journal-AI/releases)** · **[Privacy](#privacy-and-your-data)**
@@ -192,7 +194,8 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
   the month beside your recent trades and open positions, and a tabbed breakdown by time of day,
   day of week and strategy
 - **Exit Lab**: replays your stock trades on minute prices to compare alternative exits in R and dollars, per trade and across all trades
-- **Trade View**: every trade with executions, playbook setup tags, MFE/MAE and exit efficiency, its AI analysis and an intraday chart with your fills on it
+- **Trade View**: every trade with executions, playbook setup tags, MFE/MAE and exit efficiency, its AI analysis and an intraday chart with your fills on it. The gear on each row moves a trade to another account (its notes and tags go with it) or deletes it
+- **Accounts**: tick several accounts in the header menu to see them together, or delete an account (the database is backed up first)
 - **Reports**: breakdowns by day of week, time of day, hold time, setup, grade, symbol, side, emotion,
   plus a Sources & Tags tab that scores where your ideas come from. One switch flips the whole page
   between bars and full numeric tables, and rows under ten trades are marked thin so a one-trade
@@ -205,8 +208,10 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
 - **Brain**: a chat that answers questions against your full trading history
 - **Settings**: the name library. Strategies, sources and tags in one place, with rename, merge and
   delete. Merging rewrites every trade that used the old name and remembers it, so the next diary
-  analysis that produces the duplicate saves it under the name you kept
-- **Import**: Thinkorswim account statement CSV and Interactive Brokers (IBKR) Activity Statement CSV, with a broker dropdown (auto-detect by default). Any other broker imports through a generic CSV template, one row per fill. Thinkorswim option
+  analysis that produces the duplicate saves it under the name you kept. Appearance picks one of
+  four themes (colors, fonts and chart style only; every page keeps the same layout), saved in your
+  browser
+- **Import**: Thinkorswim account statement CSV and Interactive Brokers (IBKR) Activity Statement CSV, with a broker dropdown (auto-detect by default). Tradovate, NinjaTrader, TopstepX, Webull, tastytrade, TradeStation and Power E*TRADE exports import in beta (see [Beta broker importers](#beta-broker-importers)). Any other broker imports through a generic CSV template, one row per fill. Thinkorswim option
   spreads: a vertical is one trade at its net price, while calendar, diagonal and custom orders keep every leg
 
 ## Screenshots
@@ -240,6 +245,11 @@ execution, symbol, source, tag and psychology.
 or delete one and reassign its trades.
 
 ![Settings: the strategy, source and tag library with rename, merge and delete](docs/screenshot-settings.png)
+
+**Themes.** Settings > Appearance switches the whole app between four looks: Original, Minimal,
+Natural and Pro terminal. Only colors, fonts and chart style change; every page keeps its layout.
+
+![The dashboard in the four themes: Original, Minimal, Natural and Pro terminal](docs/screenshot-themes.png)
 
 ## Quick start
 
@@ -313,13 +323,38 @@ copying it somewhere safe is the whole backup.
 To check what changed, see the [releases page](https://github.com/simonro/Trading-Journal-AI/releases).
 
 **Re-importing a day after an import fix.** An import skips fills that are already stored, so a
-plain re-import leaves old rows as they were. Open the day, delete the affected trades with the delete
-button on each trade row (notes and tags on them go too), then import that day's statement again.
+plain re-import leaves old rows as they were. Open the day, delete the affected trades with the gear
+on each trade row (Delete trade; notes and tags on them go too), then import that day's statement again.
 v1.5.2 needs this for Thinkorswim days with option spreads, which earlier versions overstated.
+
+**v1.6.0 updates the database on first start.** Notes and tags are now kept per account, so two
+accounts with a trade of the same name each keep their own. Existing notes stay on the trades they
+belong to; nothing needs to be re-imported. Back up `trading_journal.db` before the first start, as
+with any update.
+
+## Beta broker importers
+
+Tradovate (Orders), NinjaTrader (Executions), TopstepX (trades), Webull (order history), tastytrade
+(transactions, with expirations and assignments), TradeStation (activity) and Power E*TRADE exports
+have their own importers. They are **beta**: they were built from the brokers' documented column
+layouts and tested on sample files, not yet on many real accounts. Pick the broker on the Import page
+to see where its export lives in the broker's app.
+
+- For the exports whose times carry no zone (all but tastytrade) you pick the timezone the file's
+  times are in; the journal remembers it per account.
+- A file that holds several broker accounts asks which one to import.
+- The Tradovate and Power E*TRADE exports have no commissions, so fees come in as $0.
+
+**Help make them solid:** if a beta importer misreads your file, or your broker's export looks
+different, [open an issue](https://github.com/simonro/Trading-Journal-AI/issues/new) with a sample
+export that has the account numbers and personal details removed (a few days of fills is enough).
+The column readers for Tradovate, NinjaTrader, TopstepX and Webull are based on LuxAlgo's MIT-licensed
+trade-journal importers; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Importing from a broker that is not listed
 
-Thinkorswim and Interactive Brokers have dedicated importers. For anything else, use the generic
+Thinkorswim and Interactive Brokers have dedicated importers, and the brokers above have beta ones.
+For anything else, use the generic
 template: one row per fill, which the journal groups into round-trip trades exactly like a broker
 import. On the Import page, open **Broker not listed?** to download it.
 

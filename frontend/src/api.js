@@ -26,6 +26,8 @@ export const accountsApi = {
   list: () => api.get('/api/accounts'),
   create: (data) => api.post('/api/accounts', data),
   update: (id, data) => api.put(`/api/accounts/${id}`, data),
+  usage: (id) => api.get(`/api/accounts/${id}/usage`),
+  remove: (id) => api.delete(`/api/accounts/${id}`),
 };
 
 export const tradesApi = {
@@ -33,10 +35,15 @@ export const tradesApi = {
   create: (data) => api.post('/api/trades', data),
   update: (id, data) => api.put(`/api/trades/${id}`, data),
   delete: (id) => api.delete(`/api/trades/${id}`),
-  getAnalysis: (group) => api.get(`/api/trades/${encodeURIComponent(group)}/analysis`),
+  moveAccount: (id, accountId) => api.patch(`/api/trades/${id}/account`, { account_id: accountId }),
+  // Notes and tags are per account: two accounts can share a trade_group name.
+  getAnalysis: (group, accountId) =>
+    api.get(`/api/trades/${encodeURIComponent(group)}/analysis`, { params: { account_id: accountId } }),
   getAnalysisOptions: () => api.get('/api/analysis-options'),
-  updateAnalysis: (group, data) => api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data),
-  addTag: (group, data) => api.post(`/api/trades/${encodeURIComponent(group)}/tags`, data),
+  updateAnalysis: (group, accountId, data) =>
+    api.patch(`/api/trades/${encodeURIComponent(group)}/analysis`, data, { params: { account_id: accountId } }),
+  addTag: (group, accountId, data) =>
+    api.post(`/api/trades/${encodeURIComponent(group)}/tags`, data, { params: { account_id: accountId } }),
   deleteTag: (tagId) => api.delete(`/api/trade-tags/${tagId}`),
   setSetup: (id, setup, note) => api.patch(`/api/trades/${id}/setup`, { setup, note }),
   listCustomSetups: () => api.get('/api/setups/custom'),

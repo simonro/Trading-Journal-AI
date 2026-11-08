@@ -61,6 +61,8 @@ jest.mock('./api', () => {
       list: fn(() => ok(ACCOUNTS)),
       create: fn(() => ok({ id: 3 })),
       update: fn(() => ok({})),
+      usage: fn(() => ok({ trades: 12, first_date: '2026-09-01', last_date: '2026-09-30', diary_entries: 0 })),
+      remove: fn(() => ok({ ok: true })),
     }),
     tradesApi: withDefault({
       list: fn((params = {}) => ok(params.open_only ? [OPEN_TRADE] : [TRADE, TRADE_2])),
@@ -68,6 +70,8 @@ jest.mock('./api', () => {
       getAnalysis: fn(() => ok(null)),
       getAnalysisOptions: fn(() => ok({ strategies: [], idea_sources: [] })),
       listCustomSetups: fn(() => ok([])),
+      delete: fn(() => ok({ deleted: true })),
+      moveAccount: fn(() => ok({ moved: true })),
     }),
     kpisApi: withDefault({ get: fn(() => ok({ total_net_pnl: 100, daily_pnl: [], by_strategy: [] })) }),
     importApi: withDefault({}),
@@ -158,9 +162,11 @@ test('Brain opens from the header as a dialog and closes on Escape', async () =>
 test('account menu keeps selection, rename and new-account controls', async () => {
   await renderApp();
   fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
-  const menu = screen.getByRole('menu', { name: 'Accounts' });
-  expect(within(menu).getByRole('menuitemradio', { name: 'All Accounts' })).toBeInTheDocument();
-  expect(within(menu).getByRole('menuitemradio', { name: /Day Trading/ })).toBeInTheDocument();
+  const menu = screen.getByRole('group', { name: 'Accounts' });
+  expect(within(menu).getByRole('button', { name: 'All Accounts' })).toBeInTheDocument();
+  expect(within(menu).getByRole('button', { name: 'Day Trading' })).toBeInTheDocument();
+  expect(within(menu).getByRole('checkbox', { name: 'Include Day Trading' })).toBeInTheDocument();
+  expect(within(menu).getByRole('button', { name: 'Delete Day Trading' })).toBeInTheDocument();
   expect(within(menu).getByRole('button', { name: /New Account/ })).toBeInTheDocument();
 
   fireEvent.click(within(menu).getByRole('button', { name: 'Rename Day Trading' }));
@@ -173,8 +179,33 @@ test('account menu keeps selection, rename and new-account controls', async () =
 test('choosing an account updates the shared header state', async () => {
   await renderApp();
   fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
-  fireEvent.click(screen.getByRole('menuitemradio', { name: /Swing/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Swing' }));
   expect(await screen.findByRole('button', { name: 'Account: Swing' })).toBeInTheDocument();
+});
+
+test('ticking accounts combines them, and ticking every one is All Accounts', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Include Swing' }));
+  expect(await screen.findByRole('button', { name: 'Account: Swing' })).toBeInTheDocument();
+  await waitFor(() => expect(kpisApi.get).toHaveBeenLastCalledWith(expect.objectContaining({ account_id: 2 })));
+
+  // The menu stays open, so a second box can be ticked.
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Include Day Trading' }));
+  expect(await screen.findByRole('button', { name: 'Account: All Accounts' })).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: 'Include all accounts' })).toBeChecked();
+});
+
+test('deleting an account asks first and names how many trades go with it', async () => {
+  await renderApp();
+  fireEvent.click(screen.getByRole('button', { name: 'Account: All Accounts' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Swing' }));
+  const dialog = await screen.findByRole('alertdialog', { name: 'Delete Swing?' });
+  const confirm = await within(dialog).findByRole('button', { name: 'Delete account and 12 trades' });
+  expect(accountsApi.remove).not.toHaveBeenCalled();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(accountsApi.remove).toHaveBeenCalledWith(2));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 });
 
 test('Add Trade opens a modal dialog that closes on Escape', async () => {
@@ -198,6 +229,74 @@ test('Reports keeps its tabs, adds Sources & Tags, and supports arrow-key naviga
   expect(within(tablist).getByRole('tab', { name: 'Leaks' })).toHaveAttribute('aria-selected', 'true');
   // Opening Leaks fetches them; let that settle inside act.
   await act(async () => {});
+});
+
+test('Trade View row gear moves a trade to another account and deletes one, without opening it', async () => {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  const gear = await screen.findByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ });
+
+  fireEvent.click(gear);
+  expect(gear).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: /Move to account/ }));
+  const move = await screen.findByRole('dialog', { name: 'Move trade to another account' });
+  // The trade's own account is not offered as a target.
+  expect(within(move).getByRole('combobox', { name: 'Move to' })).toHaveDisplayValue('Swing');
+  const listCalls = tradesApi.list.mock.calls.length;
+  fireEvent.click(within(move).getByRole('button', { name: 'Move trade' }));
+  await waitFor(() => expect(tradesApi.moveAccount).toHaveBeenCalledWith(101, 2));
+  await waitFor(() => expect(tradesApi.list.mock.calls.length).toBeGreaterThan(listCalls));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  const del = await screen.findByRole('dialog', { name: 'Delete this trade?' });
+  fireEvent.click(within(del).getByRole('button', { name: 'Cancel' }));
+  expect(tradesApi.delete).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  fireEvent.click(within(await screen.findByRole('dialog', { name: 'Delete this trade?' })).getByRole('button', { name: 'Delete trade' }));
+  await waitFor(() => expect(tradesApi.delete).toHaveBeenCalledWith(101));
+  // None of this opened the trade.
+  expect(screen.queryByRole('tablist', { name: 'Trade review sections' })).not.toBeInTheDocument();
+});
+
+test('a refused move shows the reason and keeps the dialog open', async () => {
+  tradesApi.moveAccount.mockImplementation(() => Promise.reject({
+    response: { data: { detail: 'Swing already has a TSLA trade on 2026-09-10 with the same name.' } } }));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  fireEvent.click(await screen.findByRole('button', { name: /^Actions for TSLA on 2026-09-10 at \d\d:\d\d$/ }));
+  fireEvent.click(screen.getByRole('menuitem', { name: /Move to account/ }));
+  const move = await screen.findByRole('dialog', { name: 'Move trade to another account' });
+  fireEvent.click(within(move).getByRole('button', { name: 'Move trade' }));
+  expect(await within(move).findByRole('alert')).toHaveTextContent('Swing already has a TSLA trade');
+  expect(screen.getByRole('dialog', { name: 'Move trade to another account' })).toBeInTheDocument();
+});
+
+test('deleting the only trade on the last page goes back a page instead of showing none', async () => {
+  // 26 trades: page 2 holds one. After the delete the list has 25 and page 2 no longer exists.
+  const many = Array.from({ length: 26 }, (_, i) => ({
+    id: 500 + i, account_id: 1, trade_group: `9/10/26_T${i}_STOCK_1`, date: '2026-09-10', ticker: `T${i}`,
+    instrument_type: 'STOCK', side: 'LONG', gross_pnl: 10, net_pnl: 10, commissions: 0,
+    executions: [{ date: '2026-09-10', time: `09:${String(10 + i).padStart(2, '0')}:00`, action: 'BOT', qty: 1, price: 1 }],
+  }));
+  let current = many;
+  tradesApi.list.mockImplementation(() => Promise.resolve({ data: current }));
+  tradesApi.delete.mockImplementation((id) => { current = current.filter(t => t.id !== id); return Promise.resolve({ data: { deleted: true } }); });
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  fireEvent.click(await screen.findByRole('button', { name: /Next/ }));
+  expect(await screen.findByText(/Page 2 of 2/)).toBeInTheDocument();
+  const gear = screen.getAllByRole('button', { name: /^Actions for T\d+ on 2026-09-10/ });
+  expect(gear).toHaveLength(1);
+  fireEvent.click(gear[0]);
+  fireEvent.click(screen.getByRole('menuitem', { name: /Delete trade/ }));
+  fireEvent.click(within(await screen.findByRole('dialog', { name: 'Delete this trade?' })).getByRole('button', { name: 'Delete trade' }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: /^Actions for T\d+ on 2026-09-10/ })).toHaveLength(25));
+  expect(screen.queryByText(/No trades found/)).not.toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Trades' })).toHaveFocus();
 });
 
 test('Trade View opens Trade Details with all six tabs, back and previous/next', async () => {
@@ -272,12 +371,12 @@ test('Day Review keeps the loss-streak alert and its Dismiss control', async () 
   expect(screen.getByRole('button', { name: /Regenerate AI/ })).toBeInTheDocument();
 });
 
-test('Settings has General, Strategies, Sources and Tags sections, and Tags leaves out strategy and source types', async () => {
+test('Settings has General, Strategies, Sources, Tags and Appearance sections, and Tags leaves out strategy and source types', async () => {
   await renderApp();
   fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
   const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
   expect(within(tablist).getAllByRole('tab').map(t => t.textContent.replace(/\d+/g, '').trim()))
-    .toEqual(['General', 'Strategies', 'Sources', 'Tags']);
+    .toEqual(['General', 'Strategies', 'Sources', 'Tags', 'Appearance']);
   expect(await screen.findByText('VWAP Cross')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit VWAP Cross' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Delete VWAP Cross' })).toBeInTheDocument();
@@ -287,6 +386,29 @@ test('Settings has General, Strategies, Sources and Tags sections, and Tags leav
   expect(screen.getByRole('region', { name: 'Execution tags' })).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Strategy tags/ })).not.toBeInTheDocument();
   expect(screen.queryByRole('region', { name: /Source tags/ })).not.toBeInTheDocument();
+});
+
+test('Settings > Appearance switches the theme and remembers it in this browser', async () => {
+  await renderApp();
+  fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Settings' }));
+  const tablist = await screen.findByRole('tablist', { name: 'Settings sections' });
+  fireEvent.click(within(tablist).getByRole('tab', { name: 'Appearance' }));
+  const group = await screen.findByRole('radiogroup', { name: 'Theme' });
+  expect(within(group).getByRole('radio', { name: /Original/ })).toBeChecked();
+
+  try {
+    fireEvent.click(within(group).getByRole('radio', { name: /Natural/ }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('natural');
+    expect(window.localStorage.getItem('journal-theme')).toBe('natural');
+
+    fireEvent.click(within(group).getByRole('radio', { name: /Original/ }));
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(window.localStorage.getItem('journal-theme')).toBeNull();
+  } finally {
+    // never let a theme leak into the tests that follow
+    document.documentElement.removeAttribute('data-theme');
+    window.localStorage.removeItem('journal-theme');
+  }
 });
 
 test('Settings merges one strategy into another', async () => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, ChevronUp, ChevronDown } from 'lucide-react';
-import { tradesApi } from '../api';
+import { tradesApi, accountsApi } from '../api';
 import TradeRow from './TradeRow';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue } from './ui';
 
@@ -40,6 +40,12 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
   }, []);
   useEffect(() => { reloadCustomSetups(); }, [reloadCustomSetups]);
 
+  // Accounts for the row menu's "Move to account".
+  const [accounts, setAccounts] = useState([]);
+  useEffect(() => {
+    accountsApi.list().then(res => setAccounts(res.data || [])).catch(() => { /* Move shows no targets */ });
+  }, []);
+
   const [sortCol, setSortCol] = useState('datetime');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -50,9 +56,10 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
 
   // A slow reply from an earlier filter must not overwrite the newest one.
   const loadRun = useRef(0);
-  const load = useCallback(async () => {
+  // quiet: refresh in place after a move or delete, without skeleton rows (keeps scroll and focus).
+  const load = useCallback(async ({ quiet = false } = {}) => {
     const run = ++loadRun.current;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     setError(null);
     try {
       const params = {};
@@ -108,6 +115,17 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
 
   const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
+  // Deleting the last trade on the last page must not leave an empty "Page 2 of 1".
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const tableRef = useRef(null);
+  const afterRowAction = useCallback(async (what) => {
+    await load({ quiet: true });
+    if (what === 'deleted') tableRef.current?.focus();
+  }, [load]);
+
   const firstShown = sorted.length ? (page - 1) * PAGE_SIZE + 1 : 0;
   const lastShown = Math.min(page * PAGE_SIZE, sorted.length);
 
@@ -187,7 +205,7 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
         </div>
       )}
 
-      <section className="card panel-flush" aria-label="Trades">
+      <section className="card panel-flush trades-panel" aria-label="Trades" ref={tableRef} tabIndex={-1}>
         <div className="table-container">
           <table style={{ minWidth: 980 }}>
             <thead>
@@ -201,20 +219,21 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                 <th title="MFE / MAE / exit efficiency: best gain reached, worst loss reached, and the share of the move you captured">MFE / MAE / Exit</th>
                 {sortTh('r_multiple', 'R', 'num')}
                 <th><span className="sr-only">Expand</span></th>
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 [...Array(5)].map((_, i) => (
                   <tr key={i}>
-                    {[...Array(9)].map((_, j) => (
+                    {[...Array(10)].map((_, j) => (
                       <td key={j}><div className="skeleton" style={{ height: 16, width: '80%' }} /></td>
                     ))}
                   </tr>
                 ))
               ) : paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="empty">
+                  <td colSpan={10} className="empty">
                     No trades found. Import a CSV to get started.
                   </td>
                 </tr>
@@ -227,7 +246,8 @@ export default function Trades({ accountId, initialDateFrom = '', initialDateTo 
                     onOpenDetail={(t) => onOpenDetail(t, paginated)}
                     customSetups={customSetups}
                     onCustomSetupsChanged={reloadCustomSetups}
-                    onTradeDeleted={load}
+                    accounts={accounts}
+                    onChanged={afterRowAction}
                   />
                 ))
               )}

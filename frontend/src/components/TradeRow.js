@@ -1,7 +1,8 @@
 import { excursionText } from '../utils/excursions';
 import { useState } from 'react';
 import { tradesApi } from '../api';
-import { ChevronRight, Trash2 } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
+import TradeActions from './TradeActions';
 
 const signed$ = (v) => {
   if (v == null) return '-';
@@ -19,30 +20,13 @@ function ConfidenceDot({ level }) {
 }
 
 
-export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged, onTradeDeleted }) {
+export default function TradeRow({ trade, openTime, onOpenDetail, customSetups = [], onCustomSetupsChanged, accounts, onChanged }) {
   const pnl = trade.net_pnl ?? 0;
   const pnlTone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
-  const [deleting, setDeleting] = useState(false);
 
   // A row is a link to the trade. The in-place expand was removed: it showed a
   // subset of the detail page and split the same job across two places.
   const handleOpen = () => { if (onOpenDetail) onOpenDetail(trade); };
-
-  const handleDelete = async (e) => {
-    e.stopPropagation();
-    const label = `${trade.ticker} on ${trade.date}`;
-    if (!window.confirm(`Delete this trade (${label})? This removes the trade and all its buy/sell executions permanently.`)) {
-      return;
-    }
-    setDeleting(true);
-    try {
-      await tradesApi.delete(trade.id);
-      if (onTradeDeleted) await onTradeDeleted();
-    } catch (err) {
-      alert('Could not delete trade: ' + (err?.response?.data?.detail || err.message));
-      setDeleting(false);
-    }
-  };
 
   // Playbook setup tag: set by hand from the dropdown below.
   const ADD_NEW = '__add_new__';
@@ -276,21 +260,15 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
         <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
           <span className="text-muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {trade.match_confidence && <ConfidenceDot level={trade.match_confidence} />}
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={deleting}
-              title="Delete trade"
-              aria-label={`Delete trade ${trade.ticker} on ${trade.date}`}
-              className="btn btn-ghost btn-icon"
-              style={{ color: 'var(--result-neg)' }}
-            >
-              <Trash2 size={14} />
-            </button>
             <span onClick={handleOpen} style={{ display: 'inline-flex', cursor: 'pointer' }}>
               <ChevronRight size={15} aria-hidden="true" />
             </span>
           </span>
+        </td>
+        {/* clicks here never open the trade; keys are already ignored by the row unless it has focus
+            itself, and must keep bubbling so the menu and dialogs hear Escape */}
+        <td className="trade-actions-cell" onClick={e => e.stopPropagation()}>
+          <TradeActions trade={trade} openTime={openTime} accounts={accounts} onChanged={onChanged} />
         </td>
       </tr>
 

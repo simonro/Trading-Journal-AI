@@ -42,7 +42,7 @@ def store_trade(db, t):
     db.execute("""INSERT INTO trades(id,account_id,trade_group,date,ticker,instrument_type,side,executions,source)
         VALUES(?,1,?,?,'FIXTURE','STOCK',?,?,?)""",
         (t.id,str(t.id),execs[0]["date"],"LONG" if t.direction==1 else "SHORT",json.dumps(execs),t.source))
-    db.execute("INSERT INTO trade_analysis(trade_group,ticker,date,stop_loss) VALUES(?,'FIXTURE',?,?)",
+    db.execute("INSERT INTO trade_analysis(trade_group,account_id,ticker,date,stop_loss) VALUES(?,1,'FIXTURE',?,?)",
                (str(t.id),execs[0]["date"],t.stop))
     db.commit()
 

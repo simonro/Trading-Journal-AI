@@ -17,11 +17,16 @@ import Settings from './components/Settings';
 import ExitLab from './components/ExitLab';
 import { DemoLabel } from './components/exitlab/shared';
 import UpdateBanner from './components/UpdateBanner';
+import { accountFilter, singleAccountId } from './accountSelection';
 
 export default function App() {
   const [page, setPage] = useState('dashboard');
   const [accounts, setAccounts] = useState([]);
-  const [selectedAccountId, setSelectedAccountId] = useState(null);
+  // [] is All Accounts. Pages get accountId: null, one id, or "1,4" for several.
+  const [selectedAccountIds, setSelectedAccountIds] = useState([]);
+  const accountId = accountFilter(selectedAccountIds);
+  const oneAccountId = singleAccountId(selectedAccountIds);
+  const selectOneAccount = (id) => setSelectedAccountIds(id == null ? [] : [id]);
   const [showAddTrade, setShowAddTrade] = useState(false);
   const [tradesFilter, setTradesFilter] = useState({ dateFrom: '', dateTo: '' });
   const [selectedTrade, setSelectedTrade] = useState(null);
@@ -50,6 +55,11 @@ export default function App() {
     try {
       const res = await accountsApi.list();
       setAccounts(res.data);
+      // Drop a deleted account from the selection.
+      setSelectedAccountIds(ids => {
+        const kept = ids.filter(id => res.data.some(a => a.id === id));
+        return kept.length === ids.length ? ids : kept;
+      });
     } catch (e) {
       console.error('Failed to load accounts', e);
     }
@@ -92,8 +102,8 @@ export default function App() {
         detailOrigin={detailOrigin}
         onNavigate={navigate}
         accounts={accounts}
-        selectedAccountId={selectedAccountId}
-        onSelectAccount={setSelectedAccountId}
+        selectedAccountIds={selectedAccountIds}
+        onSelectAccounts={setSelectedAccountIds}
         onAddTrade={() => setShowAddTrade(true)}
         onAccountCreated={loadAccounts}
         brainOpen={brainOpen}
@@ -102,13 +112,12 @@ export default function App() {
 
       <main className="app-main" id="main">
         <UpdateBanner />
-        {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountId == null || a.id === selectedAccountId))} />}
+        {page !== 'exit-lab' && page !== 'trade-detail' && <DemoLabel show={accounts.some(a => a.broker === 'Synthetic demo' && (selectedAccountIds.length === 0 || selectedAccountIds.includes(a.id)))} />}
         {page === 'dashboard' && (
           <Dashboard
-            accountId={selectedAccountId}
+            accountId={accountId}
             accounts={accounts}
-            selectedAccountId={selectedAccountId}
-            onSelectAccount={setSelectedAccountId}
+            selectedAccountIds={selectedAccountIds}
             onDayClick={handleCalendarDayClick}
             onOpenDetail={handleOpenDetail}
             onViewAllTrades={() => navigate('trades')}
@@ -117,7 +126,7 @@ export default function App() {
         {page === 'trades' && (
           <Trades
             key={`${tradesFilter.dateFrom}|${tradesFilter.dateTo}`}
-            accountId={selectedAccountId}
+            accountId={accountId}
             initialDateFrom={tradesFilter.dateFrom}
             initialDateTo={tradesFilter.dateTo}
             onOpenDetail={handleOpenDetail}
@@ -139,40 +148,47 @@ export default function App() {
         )}
         {page === 'calendar' && (
           <Calendar
-            accountId={selectedAccountId}
+            accountId={accountId}
             onDayClick={handleCalendarDayClick}
           />
         )}
         {page === 'import' && (
           <Import
-            accountId={selectedAccountId}
+            accountId={oneAccountId}
             accounts={accounts}
             onImportDone={() => {}}
           />
         )}
-        {page === 'diary' && <Diary accountId={selectedAccountId} />}
+        {page === 'diary' && <Diary accountId={accountId} />}
         {page === 'day-review' && (
           <DailySummary
-            accountId={selectedAccountId}
+            accountId={accountId}
             date={selectedDate}
             onDateChange={setSelectedDate}
             onOpenDetail={handleOpenDetail}
           />
         )}
         {page === 'reports' && (
-          <Reports accountId={selectedAccountId} onOpenDetail={handleOpenDetail} initial={reportsReturn} />
+          <Reports accountId={accountId} onOpenDetail={handleOpenDetail} initial={reportsReturn} />
         )}
         {page === 'help' && <Help />}
         {page === 'settings' && <Settings />}
-        {page === 'exit-lab' && <ExitLab accountId={selectedAccountId} accounts={accounts} onSelectAccount={setSelectedAccountId} onOpenDetail={handleOpenDetail} />}
+        {page === 'exit-lab' && (
+          <ExitLab
+            accountId={oneAccountId}
+            accounts={accounts}
+            onSelectAccount={selectOneAccount}
+            onOpenDetail={handleOpenDetail}
+          />
+        )}
       </main>
 
-      <Brain accountId={selectedAccountId} open={brainOpen} onOpenChange={setBrainOpen} />
+      <Brain accountId={accountId} open={brainOpen} onOpenChange={setBrainOpen} />
 
       {showAddTrade && (
         <AddTradeModal
           accounts={accounts}
-          defaultAccountId={selectedAccountId}
+          defaultAccountId={oneAccountId}
           onClose={() => setShowAddTrade(false)}
           onSaved={handleTradeAdded}
         />

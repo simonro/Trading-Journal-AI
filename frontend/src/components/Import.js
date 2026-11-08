@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Upload, FileText, Image, CheckCircle, AlertCircle } from 'lucide-react';
-import { importApi } from '../api';
+import { importApi, accountsApi } from '../api';
 import { PageHeader } from './ui';
 
 // Brokers the backend can parse (keys match csv_parser.BROKER_PARSERS).
@@ -9,7 +9,30 @@ const BROKERS = [
   { value: 'auto', label: 'Auto-detect' },
   { value: 'thinkorswim', label: 'Thinkorswim (Schwab)' },
   { value: 'ibkr', label: 'Interactive Brokers (IBKR)' },
+  { value: 'tradovate', label: 'Tradovate (beta)' },
+  { value: 'ninjatrader', label: 'NinjaTrader (beta)' },
+  { value: 'topstepx', label: 'TopstepX (beta)' },
+  { value: 'webull', label: 'Webull (beta)' },
+  { value: 'tastytrade', label: 'tastytrade (beta)' },
+  { value: 'tradestation', label: 'TradeStation (beta)' },
+  { value: 'etrade', label: 'Power E*TRADE (beta)' },
   { value: 'generic', label: 'Other broker (generic template)' },
+];
+
+// Exports whose times carry no zone of their own: the user says which zone they are in.
+// The choice is saved on the account, so a later import of the same fills matches them.
+const ZONED_BROKERS = new Set(['auto', 'tradovate', 'ninjatrader', 'topstepx', 'webull', 'tradestation', 'etrade']);
+const TIMEZONES = [
+  ['America/New_York', 'Eastern (New York)'],
+  ['America/Chicago', 'Central (Chicago)'],
+  ['America/Denver', 'Mountain (Denver)'],
+  ['America/Phoenix', 'Arizona (Phoenix)'],
+  ['America/Los_Angeles', 'Pacific (Los Angeles)'],
+  ['UTC', 'UTC'],
+  ['Europe/London', 'London'],
+  ['Europe/Berlin', 'Central Europe (Berlin)'],
+  ['Asia/Singapore', 'Singapore'],
+  ['Australia/Sydney', 'Sydney'],
 ];
 
 // Served from frontend/public/templates, so they download straight from the app.
@@ -17,16 +40,30 @@ const TEMPLATE_URL = '/templates/generic_trades_template.csv';
 const EXAMPLE_URL = '/templates/generic_trades_example.csv';
 
 const BROKER_HELP = {
-  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise a Thinkorswim account statement or an IBKR Activity Statement.',
+  auto: 'Pick a broker above, or leave Auto-detect and the importer will recognise the file. Supported: Thinkorswim, IBKR, Tradovate, NinjaTrader, TopstepX, Webull, tastytrade, TradeStation and Power E*TRADE.',
   thinkorswim: <>Export from Thinkorswim desktop: <em>Monitor → Account Statement → export icon → Export to File (CSV)</em></>,
   ibkr: <>Export from IBKR Client Portal: <em>Performance &amp; Reports → Statements → Activity → pick the period → Download as CSV</em></>,
+  tradovate: <>The Orders export (columns like <em>orderId, B/S, Contract, Filled Qty, Avg Fill Price, Fill Time</em>). Orders with a filled quantity are imported. This export has no commissions, so fees come in as $0.</>,
+  ninjatrader: <>The Executions grid exported to CSV (columns like <em>Instrument, Action, Quantity, Price, Time, Commission, Account</em>).</>,
+  topstepx: <>The trades export (columns like <em>ContractName, Side, Size, ExecutePrice, FilledAt</em>).</>,
+  webull: <>The order history export (columns like <em>Symbol, Side, Status, Filled, Avg Price, Filled Time</em>). Stocks and options.</>,
+  tastytrade: <>History, then Transactions, pick the dates and download the CSV (scroll to the end first so every row is loaded). Stocks and options, including expirations and assignments. Cash movements are left out.</>,
+  tradestation: <>The Tax Center activity download (columns like <em>Transaction, Quantity, Symbol, CallPut, Price, Commission, Activity Time</em>). Stocks and options, up to 6 months per file.</>,
+  etrade: <>Power E*TRADE Orders, downloaded as CSV (columns like <em>Symbol, Status, Fill, Description, Time</em>). Filled orders are imported. This export has no commissions, so fees come in as $0.</>,
   generic: <>Copy your fills into the template, one row per execution. Buys and sells of the same symbol are grouped into round-trip trades automatically, the same way as a broker import.</>,
 };
 
 const BROKER_DROP_LABEL = {
-  auto: 'Drop your broker CSV (Thinkorswim or IBKR)',
+  auto: 'Drop your broker CSV',
   thinkorswim: 'Drop Thinkorswim account statement CSV',
   ibkr: 'Drop IBKR Activity Statement CSV',
+  tradovate: 'Drop Tradovate Orders CSV',
+  ninjatrader: 'Drop NinjaTrader Executions CSV',
+  topstepx: 'Drop TopstepX trades CSV',
+  webull: 'Drop Webull order history CSV',
+  tastytrade: 'Drop tastytrade transactions CSV',
+  tradestation: 'Drop TradeStation activity CSV',
+  etrade: 'Drop Power E*TRADE orders CSV',
   generic: 'Drop your filled-in generic template CSV',
 };
 
@@ -35,6 +72,13 @@ function brokerFromAccount(account) {
   const b = (account?.broker || '').toLowerCase();
   if (/ibkr|interactive/.test(b)) return 'ibkr';
   if (/thinkorswim|tos|schwab/.test(b)) return 'thinkorswim';
+  if (/tradovate/.test(b)) return 'tradovate';
+  if (/ninja/.test(b)) return 'ninjatrader';
+  if (/topstep/.test(b)) return 'topstepx';
+  if (/webull/.test(b)) return 'webull';
+  if (/tasty/.test(b)) return 'tastytrade';
+  if (/tradestation/.test(b)) return 'tradestation';
+  if (/e\*?trade/.test(b)) return 'etrade';
   return 'auto';
 }
 
@@ -165,6 +209,27 @@ export default function Import({ accounts, accountId }) {
   const [importing, setImporting] = useState(false);
   const [csvResult, setCsvResult] = useState(null);
   const [csvError, setCsvError] = useState(null);
+  // Each account's saved file timezone, read fresh from the server: the accounts prop is
+  // loaded once at startup and would show a stale zone after an import saved a new one.
+  const [savedZones, setSavedZones] = useState(() =>
+    Object.fromEntries(accounts.map(a => [String(a.id), a.import_timezone || ''])));
+  const zoneOf = id => savedZones[String(id)] || 'America/New_York';
+  const [csvZone, setCsvZone] = useState(() => zoneOf(accountId));
+  // Sent only when the user picked a zone, so the server otherwise keeps the saved one.
+  const [zoneTouched, setZoneTouched] = useState(false);
+  const loadZones = () => accountsApi.list().then(res => {
+    const zones = Object.fromEntries((res.data || []).map(a => [String(a.id), a.import_timezone || '']));
+    setSavedZones(zones);
+    return zones;
+  }).catch(() => null);
+  useEffect(() => {
+    loadZones().then(zones => {
+      if (zones && csvAccountId) setCsvZone(zones[String(csvAccountId)] || 'America/New_York');
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Set when the file holds several broker accounts: the user picks one.
+  const [sourceAccounts, setSourceAccounts] = useState(null);
+  const [sourceAccount, setSourceAccount] = useState('');
 
   // Diary upload state
   const [diaryFile, setDiaryFile] = useState(null);
@@ -173,6 +238,8 @@ export default function Import({ accounts, accountId }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [diaryResult, setDiaryResult] = useState(null);
   const [diaryError, setDiaryError] = useState(null);
+
+  const resetSource = () => { setSourceAccounts(null); setSourceAccount(''); };
 
   const handleCsvImport = async () => {
     if (!csvFile || !csvAccountId) {
@@ -186,11 +253,22 @@ export default function Import({ accounts, accountId }) {
     fd.append('file', csvFile);
     fd.append('account_id', csvAccountId);
     fd.append('broker', csvBroker);
+    if (ZONED_BROKERS.has(csvBroker) && zoneTouched) fd.append('timezone', csvZone);
+    if (sourceAccounts && sourceAccount) fd.append('source_account', sourceAccount);
     try {
       const res = await importApi.importCsv(fd);
       setCsvResult(res.data);
+      resetSource();
+      setZoneTouched(false);
+      loadZones();
     } catch (e) {
-      setCsvError(e.response?.data?.error || e.message);
+      const data = e.response?.data;
+      if (e.response?.status === 409 && data?.source_accounts) {
+        setSourceAccounts(data.source_accounts);
+        setSourceAccount(data.source_accounts[0] || '');
+      } else {
+        setCsvError(data?.error || e.message);
+      }
     } finally {
       setImporting(false);
     }
@@ -237,7 +315,7 @@ export default function Import({ accounts, accountId }) {
           <DropZone
             label={BROKER_DROP_LABEL[csvBroker]}
             accept=".csv"
-            onFile={setCsvFile}
+            onFile={f => { setCsvFile(f); resetSource(); }}
             file={csvFile}
             icon={FileText}
           />
@@ -248,7 +326,7 @@ export default function Import({ accounts, accountId }) {
               <select
                 id="imp-csv-broker"
                 value={csvBroker}
-                onChange={e => setCsvBroker(e.target.value)}
+                onChange={e => { setCsvBroker(e.target.value); resetSource(); }}
                 style={{ width: '100%' }}
               >
                 {BROKERS.map(b => (
@@ -263,6 +341,8 @@ export default function Import({ accounts, accountId }) {
                 value={csvAccountId}
                 onChange={e => {
                   setCsvAccountId(e.target.value);
+                  setCsvZone(zoneOf(e.target.value));
+                  setZoneTouched(false);
                   // Follow the account's broker when it has a recognisable one.
                   const acct = accounts.find(a => String(a.id) === e.target.value);
                   const guess = brokerFromAccount(acct);
@@ -277,7 +357,40 @@ export default function Import({ accounts, accountId }) {
                 ))}
               </select>
             </div>
+            {ZONED_BROKERS.has(csvBroker) && (
+              <div>
+                <label className="field-label" htmlFor="imp-csv-zone">Times in the file are</label>
+                <select id="imp-csv-zone" value={csvZone} onChange={e => { setCsvZone(e.target.value); setZoneTouched(true); }} style={{ width: '100%' }}>
+                  {TIMEZONES.map(([z, label]) => <option key={z} value={z}>{label}</option>)}
+                </select>
+              </div>
+            )}
           </div>
+          {ZONED_BROKERS.has(csvBroker) && csvBroker !== 'auto' && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+              Use the timezone your platform showed when you exported. Trades are stored in New York
+              time, and this account remembers the choice so a later import matches the same fills.
+            </div>
+          )}
+          {(csvBroker === 'auto' || csvBroker === 'thinkorswim') && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+              Thinkorswim files use the timezone set in Settings &gt; General.
+            </div>
+          )}
+
+          {sourceAccounts && (
+            <div className="notice" role="status" style={{ marginTop: 12, display: 'block' }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
+                This file has {sourceAccounts.length} accounts. Which one goes into this journal account?
+              </div>
+              <select aria-label="Account in the file" value={sourceAccount} onChange={e => setSourceAccount(e.target.value)} style={{ width: '100%' }}>
+                {sourceAccounts.map(a => <option key={a} value={a}>{a}</option>)}
+              </select>
+              <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+                Import each one into its own journal account, so copy-traded fills are not added together.
+              </div>
+            </div>
+          )}
 
           <button
             className="btn btn-primary"
@@ -285,7 +398,7 @@ export default function Import({ accounts, accountId }) {
             onClick={handleCsvImport}
             disabled={importing || !csvFile || !csvAccountId}
           >
-            {importing ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Importing...</> : <><Upload size={16} /> Import Trades</>}
+            {importing ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Importing...</> : <><Upload size={16} /> {sourceAccounts ? `Import ${sourceAccount}` : 'Import Trades'}</>}
           </button>
 
           {csvResult && (
@@ -294,6 +407,9 @@ export default function Import({ accounts, accountId }) {
                 <CheckCircle size={16} /> Import Complete
               </div>
               <div style={{ fontSize: 14 }}>{csvResult.message}</div>
+              {csvResult.warnings?.map(w => (
+                <div key={w} style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>{w}</div>
+              ))}
               {csvResult.errors?.length > 0 && (
                 <div style={{ fontSize: 13, color: 'var(--result-neg)', marginTop: 4 }}>
                   {csvResult.errors.length} DB error(s)

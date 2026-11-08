@@ -53,22 +53,64 @@ export function DayCurve({ trades, onPick }) {
       prev = m.cum;
     });
     d += ` L${W} ${Y(prev).toFixed(1)}`;
-    const area = `${d} L${W} ${H} L0 ${H} Z`;
+    // the fill closes on the zero line, so it shades only the distance from flat
+    const area = `${d} L${W} ${Y(0).toFixed(1)} L0 ${Y(0).toFixed(1)} Z`;
     return { X, Y, d, area, zero: Y(0), final: prev };
+  }, [marks]);
+
+  // the day's extremes: best and worst running P&L, and the deepest give-back from a high
+  const extremes = useMemo(() => {
+    if (!marks.length) return null;
+    let high = { v: 0, at: null };
+    let low = { v: 0, at: null };
+    let runPeak = 0;
+    let dd = 0;
+    marks.forEach((m) => {
+      if (m.cum > high.v) high = { v: m.cum, at: m.at };
+      if (m.cum < low.v) low = { v: m.cum, at: m.at };
+      runPeak = Math.max(runPeak, m.cum);
+      dd = Math.max(dd, runPeak - m.cum);
+    });
+    return { high, low, dd, close: marks[marks.length - 1].cum };
   }, [marks]);
 
   if (!geom) return <div className="v3-empty">No timed executions on this day, so the session cannot be drawn.</div>;
 
   const peak = Math.max(1, ...marks.map((m) => Math.abs(m.pnl)));
-  const up = geom.final >= 0;
+  // round to whole minutes first, so 9:59.6 reads 10:00 and never 9:60
+  const clock = (at) => {
+    if (at == null) return '';
+    const m = Math.round(at * 60);
+    return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+  };
+  const { high, low, dd, close } = extremes;
+  // a level line only earns its place when the day actually went there
+  const levels = [
+    high.at != null && { key: 'hi', v: high.v, cls: 'v3-pos', label: `High ${money(high.v)}`, at: high.at },
+    low.at != null && { key: 'lo', v: low.v, cls: 'v3-neg', label: `Low ${money(low.v)}`, at: low.at },
+  ].filter(Boolean);
 
   return (
+    <>
+    <div className="v3-daystats">
+      <span>High <b className={high.v > 0 ? 'v3-pos' : ''}>{high.at != null ? money(high.v) : '$0'}</b>{high.at != null && <i>{clock(high.at)}</i>}</span>
+      <span>Low <b className={low.v < 0 ? 'v3-neg' : ''}>{low.at != null ? money(low.v) : '$0'}</b>{low.at != null && <i>{clock(low.at)}</i>}</span>
+      <span>Max drawdown <b className={dd > 0 ? 'v3-neg' : ''}>{dd > 0 ? money(-dd) : '$0'}</b></span>
+      <span>Close <b className={close > 0 ? 'v3-pos' : close < 0 ? 'v3-neg' : ''}>{money(close)}</b></span>
+    </div>
     <div className="v3-session" onPointerLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        {/* green while the day is up, red while it is down: one curve, clipped at the zero line */}
         <defs>
-          <linearGradient id="v3day" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0.2" />
-            <stop offset="100%" stopColor={up ? 'var(--result-pos)' : 'var(--result-neg)'} stopOpacity="0" />
+          <clipPath id="v3day-above"><rect x="0" y="0" width={W} height={geom.zero} /></clipPath>
+          <clipPath id="v3day-below"><rect x="0" y={geom.zero} width={W} height={Math.max(0, H - geom.zero)} /></clipPath>
+          <linearGradient id="v3day-pos" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={geom.zero}>
+            <stop offset="0%" stopColor="var(--result-pos)" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="var(--result-pos)" stopOpacity="0.02" />
+          </linearGradient>
+          <linearGradient id="v3day-neg" gradientUnits="userSpaceOnUse" x1="0" y1={geom.zero} x2="0" y2={H}>
+            <stop offset="0%" stopColor="var(--result-neg)" stopOpacity="0.02" />
+            <stop offset="100%" stopColor="var(--result-neg)" stopOpacity="0.22" />
           </linearGradient>
         </defs>
         {/* the hours */}
@@ -81,10 +123,28 @@ export function DayCurve({ trades, onPick }) {
         ))}
         <line x1="0" y1={geom.zero} x2={W} y2={geom.zero} stroke="var(--divider)" strokeWidth="1"
           vectorEffect="non-scaling-stroke" />
-        <path d={geom.area} fill="url(#v3day)" />
-        <path d={geom.d} fill="none" stroke={up ? 'var(--result-pos)' : 'var(--result-neg)'}
+        {levels.map((l) => (
+          <line key={l.key} x1="0" y1={geom.Y(l.v)} x2={W} y2={geom.Y(l.v)}
+            stroke={l.key === 'hi' ? 'var(--result-pos)' : 'var(--result-neg)'} strokeOpacity="0.55"
+            strokeWidth="1" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
+        ))}
+        <path d={geom.area} fill="url(#v3day-pos)" clipPath="url(#v3day-above)" />
+        <path d={geom.area} fill="url(#v3day-neg)" clipPath="url(#v3day-below)" />
+        <path d={geom.d} fill="none" stroke="var(--result-pos)" clipPath="url(#v3day-above)"
+          strokeWidth="1.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+        <path d={geom.d} fill="none" stroke="var(--result-neg)" clipPath="url(#v3day-below)"
           strokeWidth="1.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
       </svg>
+
+      {/* the high and low, labelled at the left edge where the curve still sits on flat */}
+      {levels.map((l) => (
+        <div key={l.key} className={`v3-daylevel ${l.cls} ${l.key}`} style={{ top: `${(geom.Y(l.v) / H) * 100}%` }}>
+          {l.label} <i>{clock(l.at)}</i>
+        </div>
+      ))}
+      <div className={`v3-dayclose ${tone(close)}`} style={{ top: `${(geom.Y(close) / H) * 100}%` }}>
+        {money(close)}
+      </div>
 
       {/* one mark per trade, on the curve at its entry time */}
       {marks.map((m, i) => {
@@ -123,6 +183,7 @@ export function DayCurve({ trades, onPick }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 

@@ -1,5 +1,6 @@
 import json
 import re
+from database import in_marks
 from ai_analysis import get_client, response_text, raise_if_truncated, DIARY_MAX_TOKENS
 
 MODEL = "claude-opus-5-5"
@@ -49,13 +50,13 @@ def build_daily_context(conn, date: str, account_id) -> dict:
                ta.emotional_state, ta.entry_reason, ta.exit_reason,
                ta.ai_feedback, ta.idea_source, ta.match_confidence
         FROM trades t
-        LEFT JOIN trade_analysis ta ON t.trade_group = ta.trade_group
+        LEFT JOIN trade_analysis ta ON ta.trade_group = t.trade_group AND ta.account_id = t.account_id
         WHERE t.date = ?
     """
     params = [date]
-    if account_id is not None:
-        sql += " AND t.account_id = ?"
-        params.append(account_id)
+    if account_id:
+        sql += f" AND t.account_id IN ({in_marks(account_id)})"
+        params += account_id
     sql += " ORDER BY t.id"
 
     rows = conn.execute(sql, params).fetchall()
@@ -87,9 +88,9 @@ def build_daily_context(conn, date: str, account_id) -> dict:
     # All-time KPIs for context
     at_params = []
     at_sql = "SELECT net_pnl, gross_pnl FROM trades WHERE 1=1"
-    if account_id is not None:
-        at_sql += " AND account_id = ?"
-        at_params.append(account_id)
+    if account_id:
+        at_sql += f" AND account_id IN ({in_marks(account_id)})"
+        at_params += account_id
     at_rows = conn.execute(at_sql, at_params).fetchall()
     at_all = [dict(r)['net_pnl'] or 0 for r in at_rows]
     at_wins = [p for p in at_all if p > 0]
@@ -105,9 +106,9 @@ def build_daily_context(conn, date: str, account_id) -> dict:
     # Diary entry for the date
     diary_row = conn.execute(
         "SELECT ai_analysis FROM diary_entries WHERE entry_date = ?" +
-        (" AND account_id = ?" if account_id is not None else "") +
+        (f" AND account_id IN ({in_marks(account_id)})" if account_id else "") +
         " ORDER BY id DESC LIMIT 1",
-        [date] + ([account_id] if account_id is not None else [])
+        [date] + (account_id or [])
     ).fetchone()
 
     diary_summary = None

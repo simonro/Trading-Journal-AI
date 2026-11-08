@@ -1,5 +1,8 @@
 import re
 import json
+from collections import Counter
+
+import broker_formats
 import csv
 import io
 from datetime import datetime
@@ -17,8 +20,23 @@ MONTH_MAP = {
 
 # Futures multipliers ($ per point)
 FUTURES_MULTIPLIERS = {
+    # Equity index
     '/ES': 50, '/MES': 5, '/NQ': 20, '/MNQ': 2,
-    '/YM': 5, '/MYM': 0.5, '/RTY': 50, '/M2K': 5,
+    '/YM': 5, '/MYM': 0.5, '/RTY': 50, '/M2K': 5, '/EMD': 100,
+    # Energy
+    '/CL': 1000, '/MCL': 100, '/QM': 500, '/NG': 10000, '/QG': 2500,
+    '/RB': 42000, '/HO': 42000,
+    # Metals
+    '/GC': 100, '/MGC': 10, '/SI': 5000, '/SIL': 1000, '/HG': 25000, '/PL': 50,
+    # Rates
+    '/ZB': 1000, '/UB': 1000, '/ZN': 1000, '/ZF': 1000, '/ZT': 2000,
+    # Currencies
+    '/6E': 125000, '/M6E': 12500, '/6J': 12500000, '/6B': 62500, '/6A': 100000,
+    '/6C': 100000,
+    # Grains
+    '/ZC': 50, '/ZS': 50, '/ZW': 50,
+    # Crypto
+    '/BTC': 5, '/MBT': 0.1, '/ETH': 50, '/MET': 0.1,
 }
 
 
@@ -699,21 +717,23 @@ def execution_fingerprint(exec_dict: dict) -> str:
     return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
 
 
-def get_existing_fingerprints(conn, account_id: int) -> set[str]:
-    """Load all existing execution fingerprints for an account.
+def get_existing_fingerprints(conn, account_id: int) -> Counter:
+    """Count the stored execution fingerprints of an account.
     Reads ticker from the trade row (not stored in executions JSON) to match execution_fingerprint format.
+    A count, not a set: a 1-lot futures trader can have two identical fills, and one stored
+    copy must not hide the second copy of a new file.
     """
     cursor = conn.execute(
         "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
     )
-    fingerprints = set()
+    fingerprints = Counter()
     for row in cursor:
         ticker = row[0] or ''
         try:
             execs = json.loads(row[1] or '[]')
             for e in execs:
                 fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
-                fingerprints.add(fp)
+                fingerprints[fp] += 1
         except Exception:
             pass
     return fingerprints
@@ -911,38 +931,72 @@ def overlapping_db_fills(conn, account_id: int, new_execs: list[dict]) -> tuple[
     for ex in new_execs:
         instr = ex.get('instrument_type', 'STOCK')
         if instr == 'OPTION':
-            continue
-        days.setdefault((ex['ticker'], instr), set()).add(ex.get('iso_date') or normalize_date(ex['date']))
+            # Single-leg contracts only: a stored vertical keeps no second strike to rebuild from.
+            if ex.get('option_strike2'):
+                continue
+            key = (ex['ticker'], instr, ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
+        else:
+            key = (ex['ticker'], instr, None, None, None)
+        days.setdefault(key, set()).add(ex.get('iso_date') or normalize_date(ex['date']))
 
     fills: list[dict] = []
     old_groups: set[str] = set()
-    for (ticker, instr), dates in days.items():
-        mult = _point_value(ticker, instr)
+    for (ticker, instr, expiry, strike, opt_type), dates in days.items():
+        # Option fills come back from the DB already at 100 per contract.
+        mult = 1 if instr == 'OPTION' else _point_value(ticker, instr)
         if mult is None:
             continue
         rows = conn.execute(
-            """SELECT trade_group, ticker, instrument_type, option_expiry, option_strike, option_type, executions
+            """SELECT trade_group, ticker, instrument_type, option_expiry, option_strike, option_type,
+                      executions, gross_pnl
                FROM trades WHERE account_id = ? AND ticker = ? AND instrument_type = ?
                AND COALESCE(source, 'imported') = 'imported'""",
             (account_id, ticker, instr),
         ).fetchall()
         for row in rows:
             meta = dict(row)
+            if instr == 'OPTION':
+                if (meta['option_expiry'] != expiry or meta['option_type'] != opt_type
+                        or meta['option_strike'] is None or strike is None
+                        or abs(float(meta['option_strike']) - float(strike)) > 1e-9):
+                    continue
+                if _is_vertical_group(meta['trade_group']):
+                    continue
             execs = json.loads(meta['executions'] or '[]')
             bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
             sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
             if not ({e.get('date', '') for e in execs} & dates) and bot == sold:
                 continue
+            # The point value the trade was booked with (a generic-template multiplier
+            # column, or a statement priced in other units) beats the table's.
+            row_mult = _stored_point_value(execs, meta.get('gross_pnl')) if instr == 'FUTURE' else None
             old_groups.add(meta['trade_group'])
             for e in execs:
                 f = _rebuild_fill_from_db_exec(e, meta)
-                f['amount'] = round(f['amount'] * mult, 2)
+                f['amount'] = round(f['amount'] * (row_mult or mult), 2)
                 # keys carry the date the way this broker's parser wrote it
                 slashed = '/' in meta['trade_group'].split('_')[0]
                 f['date'] = _raw_date(f['iso_date']) if slashed else f['iso_date']
                 f['_old_group'] = meta['trade_group']
                 fills.append(f)
     return fills, old_groups
+
+
+def _stored_point_value(execs: list[dict], gross_pnl) -> float | None:
+    """Point value implied by a closed stored trade: its gross P&L over its price moves."""
+    if not gross_pnl:
+        return None
+    moves = sum(e.get('price', 0) * e.get('qty', 0) * (1 if e.get('action') != 'BOT' else -1) for e in execs)
+    if abs(moves) < 1e-9:
+        return None
+    implied = gross_pnl / moves
+    return implied if implied > 0 else None
+
+
+def _is_vertical_group(trade_group: str) -> bool:
+    """A vertical's key carries both strikes ('..._635-630_PUT_1')."""
+    parts = trade_group.split('_')
+    return len(parts) >= 3 and '-' in parts[-3].lstrip('-')
 
 
 def _cross_section_key(ex: dict) -> str:
@@ -1019,12 +1073,13 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
 
     # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
     # emits identical time/price/qty fills for large split orders)
-    existing_fps = get_existing_fingerprints(conn, account_id) if conn else set()
+    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
     skipped = 0
     unique_executions = []
     for exec_dict in all_executions:
         fp = execution_fingerprint(exec_dict)
-        if fp in existing_fps:
+        if existing_fps[fp] > 0:
+            existing_fps[fp] -= 1  # each stored copy covers one copy in the file
             skipped += 1
         else:
             # Enrich with ticker/date for serialization
@@ -1617,6 +1672,7 @@ BROKER_LABELS = {
     'thinkorswim': 'Thinkorswim',
     'ibkr': 'Interactive Brokers',
     'generic': 'the generic template',
+    **broker_formats.LABELS,
 }
 
 
@@ -1633,6 +1689,9 @@ def detect_broker(content: str) -> str | None:
     if ('CASH BALANCE' in upper or 'ACCOUNT STATEMENT' in upper
             or 'ACCOUNT TRADE HISTORY' in upper or 'FUTURES STATEMENTS' in upper):
         return 'thinkorswim'
+    found = broker_formats.detect(content)
+    if found:
+        return found
     # Checked last: the first non-empty row is a header with the template's columns.
     for cells in csv.reader(io.StringIO(head)):
         if not any(c.strip() for c in cells):
@@ -1641,11 +1700,45 @@ def detect_broker(content: str) -> str | None:
     return None
 
 
-def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
+def _position_sizes_before(conn, account_id: int):
+    """Signed size of each position just before a file's first fill for it, keyed like
+    broker_formats.position_key, so a file that starts by closing or flipping a position
+    is read right. Only stored fills earlier than the file count: a re-import of the
+    same file must not see its own fills as an open position."""
+    def sizes(first_fill: dict) -> dict:
+        out = {}
+        tickers = sorted({k[0] for k in first_fill})
+        if not tickers:
+            return out
+        rows = conn.execute(
+            f"SELECT ticker, instrument_type, option_expiry, option_strike, option_type, executions "
+            f"FROM trades WHERE account_id = ? AND ticker IN ({','.join('?' * len(tickers))})",
+            (account_id, *tickers)).fetchall()
+        for row in rows:
+            key = (row['ticker'], row['instrument_type'], row['option_expiry'],
+                   row['option_strike'], row['option_type'])
+            cutoff = first_fill.get(key)
+            if cutoff is None:
+                continue
+            for e in json.loads(row['executions'] or '[]'):
+                when = (e.get('iso_date') or normalize_date(e.get('date', '')), e.get('time') or '')
+                if when < cutoff:
+                    qty = e.get('qty', 0)
+                    out[key] = out.get(key, 0) + (qty if e.get('action') == 'BOT' else -qty)
+        return out
+    return sizes
+
+
+def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, *,
+                     timezone: str | None = None, source_account: str | None = None,
+                     warnings: list | None = None,
+                     import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
     """
-    Route a CSV to the right broker parser. broker is a BROKER_PARSERS key or
-    'auto'. An explicit broker that clearly does not match the file raises a
-    ValueError with a hint, instead of importing zero trades silently.
+    Route a CSV to the right broker parser. broker is a BROKER_PARSERS key, a
+    broker_formats key, or 'auto'. An explicit broker that clearly does not match
+    the file raises a ValueError with a hint, instead of importing zero trades silently.
+    timezone and source_account apply to the broker_formats exports only; notes the
+    user should see (missing fees, for example) are appended to warnings.
     import_tz: the local timezone Thinkorswim's desktop app was running in
     when it wrote the export, used to convert fill times to exchange (Eastern)
     time. Defaults to IMPORT_LOCAL_TZ; callers should normally pass the
@@ -1657,15 +1750,32 @@ def parse_broker_csv(content: str, broker: str, account_id: int, conn=None, impo
     if key == 'auto':
         if not detected:
             raise ValueError(
-                "Could not recognise this CSV. Pick the broker from the dropdown, "
-                "export an account statement from Thinkorswim or an Activity "
-                "Statement from Interactive Brokers, or copy your fills into the "
+                "Could not recognise this CSV. Pick the broker from the dropdown. "
+                "Supported exports: Thinkorswim account statement, Interactive Brokers "
+                "Activity Statement, Tradovate Orders, NinjaTrader Executions, TopstepX "
+                "trades, Webull order history, tastytrade transactions, TradeStation activity, "
+                "Power E*TRADE orders. Otherwise copy your fills into the "
                 "generic template (Import page, 'Broker not listed?')."
             )
         key = detected
 
-    if key not in BROKER_PARSERS:
+    if key not in BROKER_PARSERS and key not in broker_formats.SPEC_BY_KEY:
         raise ValueError(f"Unsupported broker '{broker}'. Supported: {', '.join(BROKER_LABELS.values())}.")
+
+    if key in broker_formats.SPEC_BY_KEY:
+        # The chosen broker's own columns decide, so a file another reader would also
+        # recognise is not refused.
+        missing = broker_formats.missing_columns(content, key)
+        if missing:
+            hint = (f" It looks like an export from {BROKER_LABELS[detected]}." if detected and detected != key else "")
+            raise ValueError(
+                f"This file does not have the columns of a {BROKER_LABELS[key]} export "
+                f"(missing: {', '.join(missing)}).{hint}"
+            )
+        executions = broker_formats.parse_rows(
+            content, key, timezone or broker_formats.DEFAULT_TIMEZONE, source_account, warnings,
+            open_positions=_position_sizes_before(conn, account_id) if conn else None)
+        return build_trades_from_executions(executions, account_id, conn)
 
     if detected and detected != key:
         raise ValueError(

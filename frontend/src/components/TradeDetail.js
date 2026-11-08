@@ -368,11 +368,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   }, []);
 
   useEffect(() => {
-    tradesApi.getAnalysis(trade.trade_group).then(r => {
+    tradesApi.getAnalysis(trade.trade_group, trade.account_id).then(r => {
       setAnalysis(r.data.analysis || {});
       setTags(r.data.tags || []);
     }).catch(() => setAnalysis({}));
-  }, [trade.trade_group]);
+  }, [trade.trade_group, trade.account_id]);
 
   // ── Execution handlers ────────────────────────────────────────────────────
 
@@ -439,7 +439,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const handleSaveStats = async () => {
     setSavingStats(true);
     try {
-      const res = await tradesApi.updateAnalysis(trade.trade_group, {
+      const res = await tradesApi.updateAnalysis(trade.trade_group, trade.account_id, {
         strategy: statsForm.strategy || null,
         idea_source: statsForm.idea_source || null,
         stop_loss: toNum(statsForm.stop_loss),
@@ -458,7 +458,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   const handleSaveStrategy = async () => {
     setSavingStrategy(true);
     try {
-      const res = await tradesApi.updateAnalysis(trade.trade_group, {
+      const res = await tradesApi.updateAnalysis(trade.trade_group, trade.account_id, {
         entry_reason: strategyForm.entry_reason || null,
         exit_reason:  strategyForm.exit_reason  || null,
         mistakes:     strategyForm.mistakes     || null,
@@ -479,7 +479,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
     setSavingTag(true);
     setTagError(null);
     try {
-      const res = await tradesApi.addTag(trade.trade_group, tagForm);
+      const res = await tradesApi.addTag(trade.trade_group, trade.account_id, tagForm);
       setTags(prev => [...prev, res.data]);
       setTagForm({ tag_type: 'strategy', tag_value: '' });
       setAddingTag(false);

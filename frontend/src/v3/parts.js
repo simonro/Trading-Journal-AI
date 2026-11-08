@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useCallback, useId } from 'react';
+import { steppedCurve } from '../theme';
 
 /* ── formatting ─────────────────────────────────────────────────────────── */
 
@@ -60,11 +61,12 @@ export function Measures({ items, className = '' }) {
 
 /* ── bar + value on one row ─────────────────────────────────────────────── */
 
-export function BarRow({ frac, label, negative }) {
+/* diverge: zero sits in the middle, a profit grows right and a loss grows left */
+export function BarRow({ frac, label, negative, diverge = false }) {
   const w = Math.max(0, Math.min(1, Number(frac) || 0));
   return (
     <div className="v3-barrow">
-      <div className="v3-bar">
+      <div className={`v3-bar${diverge ? ' diverge' : ''}`}>
         <div className="v3-bar-rail" />
         <div className={`v3-bar-fill${negative ? ' neg' : ''}`} style={{ '--w': w }} />
       </div>
@@ -164,21 +166,33 @@ export function EquityCurve({ days, height = 190, onPick }) {
   }, [days]);
 
   const W = 1000; const H = 260; const P = 8;
+  // Pro terminal draws the curve as steps: each session moves the balance once.
+  const stepped = steppedCurve();
   const geom = useMemo(() => {
     if (pts.length < 2) return null;
+    const n = pts.length;
     const lo = Math.min(0, ...pts.map((p) => p.cum));
     const hi = Math.max(...pts.map((p) => p.peak));
-    const X = (i) => P + (i / (pts.length - 1)) * (W - P * 2);
+    const X = (i) => P + (i / (n - 1)) * (W - P * 2);
     const Y = (v) => H - P - ((v - lo) / ((hi - lo) || 1)) * (H - P * 2);
-    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.cum).toFixed(1)}`).join(' ');
-    const pkl = pts.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(p.peak).toFixed(1)}`).join(' ');
-    const back = pts.slice().reverse().map((p, j) => `L${X(pts.length - 1 - j).toFixed(1)} ${Y(p.cum).toFixed(1)}`).join(' ');
+    const f = (v) => v.toFixed(1);
+    const path = (key) => pts.map((p, i) => {
+      if (i === 0) return `M${f(X(0))} ${f(Y(p[key]))}`;
+      return stepped ? `H${f(X(i))} V${f(Y(p[key]))}` : `L${f(X(i))} ${f(Y(p[key]))}`;
+    }).join(' ');
+    const line = path('cum');
+    const pkl = path('peak');
+    // walk the equity line backwards to close the drawdown band under the running high
+    const back = stepped
+      ? [`L${f(X(n - 1))} ${f(Y(pts[n - 1].cum))}`,
+        ...pts.slice(0, -1).map((p, i) => `V${f(Y(p.cum))} H${f(X(i))}`).reverse()].join(' ')
+      : pts.slice().reverse().map((p, j) => `L${f(X(n - 1 - j))} ${f(Y(p.cum))}`).join(' ');
     return {
-      X, Y, line,
+      X, Y, line, pkl,
       dd: `${pkl} ${back} Z`,
-      area: `${line} L${X(pts.length - 1).toFixed(1)} ${H} L${X(0).toFixed(1)} ${H} Z`,
+      area: `${line} L${f(X(n - 1))} ${H} L${f(X(0))} ${H} Z`,
     };
-  }, [pts]);
+  }, [pts, stepped]);
 
   const move = useCallback((e) => {
     if (!box.current || pts.length < 2) return;
@@ -205,13 +219,16 @@ export function EquityCurve({ days, height = 190, onPick }) {
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <linearGradient id="v3fade" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--result-pos)" stopOpacity="0.22" />
-            <stop offset="100%" stopColor="var(--result-pos)" stopOpacity="0" />
+            <stop offset="0%" stopColor="var(--curve-line)" style={{ stopOpacity: 'var(--curve-fill-top)' }} />
+            <stop offset="100%" stopColor="var(--curve-line)" stopOpacity="0" />
           </linearGradient>
         </defs>
         <path d={geom.area} fill="url(#v3fade)" />
-        <path d={geom.dd} fill="var(--result-neg)" fillOpacity="0.13" />
-        <path d={geom.line} fill="none" stroke="var(--result-pos)" strokeWidth="1.6"
+        <path d={geom.dd} fill="var(--result-neg)" style={{ fillOpacity: 'var(--chart-dd-opacity)' }} />
+        {/* the running high: the band between it and the curve is the drawdown */}
+        <path d={geom.pkl} fill="none" stroke="var(--peak-line)" strokeOpacity="0.55" strokeWidth="1"
+          strokeDasharray="3 4" vectorEffect="non-scaling-stroke" data-testid="v3-peak-line" />
+        <path d={geom.line} fill="none" stroke="var(--curve-line)" style={{ strokeWidth: 'var(--curve-w)' }}
           vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
       </svg>
       {h && (

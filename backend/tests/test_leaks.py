@@ -361,7 +361,7 @@ def test_setup_slice_uses_the_playbook_setup_name(client):
     conn.execute("UPDATE trades SET setup = 'Opening Drive' WHERE executions LIKE '%09:50:00%'")
     conn.execute("UPDATE trades SET setup = 'NONE' WHERE id = (SELECT MIN(id) FROM trades)")
     conn.commit()
-    rows = main._leak_rows(conn, 1, None, None)
+    rows = main._leak_rows(conn, [1], None, None)
     conn.close()
     labels = {r['setup_label'] for r in rows}
     assert labels == {'Midday Fade', 'Opening Drive', 'No setup'}

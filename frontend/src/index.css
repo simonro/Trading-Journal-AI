@@ -231,6 +231,11 @@ summary:focus-visible {
   border-radius: var(--radius-md);
 }
 .app-brand img { height: 46px; width: auto; display: block; }
+.app-brand-alt { flex-direction: column; align-items: center; gap: 2px; height: 46px; justify-content: center; }
+.app-brand-word {
+  font-family: var(--font-display); font-weight: 600; font-size: 11px; line-height: 1;
+  color: var(--text-primary); white-space: nowrap;
+}
 
 .app-nav {
   grid-area: nav;
@@ -295,6 +300,8 @@ summary:focus-visible {
 @media (max-width: 720px) {
   .app-header-inner { padding: var(--space-2) var(--space-4) 0; column-gap: var(--space-3); }
   .app-brand img { height: 38px; }
+  .app-brand-alt { height: 38px; }
+  .app-brand-alt svg { width: 28px; height: 25px; }
   .app-nav { gap: 0; }
   .app-nav-item { padding: 0 10px; font-size: 14px; }
 }
@@ -345,6 +352,40 @@ summary:focus-visible {
   color: var(--text-tertiary);
 }
 .acct-menu-sep { height: 1px; background: var(--divider-soft); margin: var(--space-1) 0; }
+.acct-menu-hint {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--fs-caption);
+  color: var(--text-faint);
+}
+/* Several accounts selected: their dots overlap in the trigger */
+.acct-dots { display: inline-flex; flex-shrink: 0; }
+.acct-dots .acct-dot + .acct-dot { margin-left: -3px; box-shadow: 0 0 0 2px var(--surface-control); }
+.acct-row { padding-left: var(--space-3); }
+.acct-row .dropdown-item { padding-left: var(--space-2); }
+.acct-check { width: 16px; height: 16px; margin: 0; flex-shrink: 0; cursor: pointer; }
+.acct-check:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+
+/* Delete account confirmation */
+.modal.acct-delete { width: 460px; }
+.acct-delete-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-section);
+  color: var(--text-primary);
+}
+.acct-delete-title .acct-dot { width: 10px; height: 10px; }
+.acct-delete-body p { margin: 0 0 var(--space-3); color: var(--text-secondary); line-height: 1.55; }
+.acct-delete-body strong { color: var(--text-primary); font-weight: 600; }
+.acct-delete-body .acct-delete-note { font-size: var(--fs-small); color: var(--text-tertiary); }
+.acct-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
 
 /* Dropdown menu items (account menu, date presets) */
 .dropdown-item {
@@ -715,8 +756,10 @@ summary:focus-visible {
   position: relative;
   overflow-x: auto;
   background:
-    linear-gradient(to right, var(--surface-panel) 30%, var(--panel-fade)) left center,
-    linear-gradient(to left, var(--surface-panel) 30%, var(--panel-fade)) right center,
+    /* the covers hide the edge shadows until there is something to scroll; they must match
+       whatever is behind the table (V3 makes cards transparent, see --scroll-cover in v3.css) */
+    linear-gradient(to right, var(--scroll-cover, var(--surface-panel)) 30%, var(--scroll-cover-fade, var(--panel-fade))) left center,
+    linear-gradient(to left, var(--scroll-cover, var(--surface-panel)) 30%, var(--scroll-cover-fade, var(--panel-fade))) right center,
     radial-gradient(farthest-side at 0 50%, var(--edge-shadow), transparent) left center,
     radial-gradient(farthest-side at 100% 50%, var(--edge-shadow), transparent) right center;
   background-repeat: no-repeat;
@@ -1018,3 +1061,48 @@ button.month-card:active { transform: translateY(1px); }
   cursor: pointer; padding: 0 2px;
 }
 .update-banner-close:hover { color: var(--text-primary); }
+
+/* ---------- Settings > Appearance: theme picker ---------- */
+.theme-picker {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4); margin-top: var(--space-5);
+}
+.theme-card {
+  position: relative; display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-4); border: 1px solid var(--divider); border-radius: var(--radius-md);
+  background: var(--surface-panel); cursor: pointer;
+}
+.theme-card:hover { border-color: var(--divider-strong); }
+.theme-card.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+.theme-card input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.theme-card:has(input:focus-visible) { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.theme-swatches { display: flex; height: 28px; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--divider-soft); }
+.theme-swatches i { flex: 1 1 0; }
+.theme-swatches i:first-child { flex-grow: 2.4; }
+.theme-name { font-weight: 600; color: var(--text-primary); font-size: var(--fs-body); }
+.theme-desc { font-size: var(--fs-small); color: var(--text-secondary); line-height: 1.4; }
+
+/* ---------- Trade View: row actions (move to account, delete) ---------- */
+.trade-actions-cell { width: 44px; text-align: right; padding-left: 0; }
+.trade-actions-btn { color: var(--text-secondary); }
+.trade-actions-btn:hover, .trade-actions-btn[aria-expanded="true"] { color: var(--text-primary); background: var(--surface-hover); }
+.trade-actions-menu {
+  position: fixed; z-index: 950; width: 200px; padding: var(--space-1) 0;
+  background: var(--surface-panel); border: 1px solid var(--divider);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-dropdown);
+}
+.trade-actions-menu button {
+  display: flex; align-items: center; gap: var(--space-2); width: 100%;
+  padding: var(--space-2) var(--space-3); background: none; border: 0; text-align: left;
+  font-size: var(--fs-small); color: var(--text-primary);
+}
+.trade-actions-menu button:hover, .trade-actions-menu button:focus-visible { background: var(--surface-hover); outline: none; }
+.trade-actions-menu button:focus-visible { box-shadow: inset 2px 0 0 var(--accent-line); }
+.trade-actions-menu button.danger { color: var(--result-neg); }
+.trade-action-dialog { width: 460px; text-align: left; white-space: normal; cursor: auto; }
+.trade-action-text { margin: var(--space-3) 0 var(--space-4); color: var(--text-primary); line-height: 1.5; }
+.trade-action-hint { margin: var(--space-3) 0; font-size: var(--fs-small); color: var(--text-secondary); line-height: 1.5; }
+.trade-action-buttons { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+/* the table takes focus after a delete; show it only for keyboard users */
+.trades-panel:focus { outline: none; }
+.trades-panel:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
