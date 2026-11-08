@@ -2,9 +2,8 @@
 
     cd backend && python -m pytest tests -q
 
-The futures files below are Simon's 5 Nov 2026 /ES day (seven round trips, already
-imported from the Schwab statement) rewritten in each broker's layout: every format has
-to give the same trades, P&L and fees the Schwab statement did.
+The futures files below are one synthetic /ES day (seven round trips) written in each
+broker's layout: every format has to give the same trades, P&L and fees.
 """
 import json
 import sqlite3
@@ -20,17 +19,17 @@ import broker_formats  # noqa: E402
 from broker_formats import SourceAccountsError, futures_ticker, parse_timestamp  # noqa: E402
 from csv_parser import detect_broker, parse_broker_csv  # noqa: E402
 
-# (time ET, side, qty, price) for 5 Nov 2026, /ESZ26
+# (time ET, side, qty, price) for a synthetic 5 Nov 2026 /ESZ26 session
 ES_DAY = [
-    ("09:46:56", "Buy", 1, "7621.75"), ("09:47:52", "Sell", 1, "7607.50"),
-    ("09:49:21", "Buy", 2, "7612.25"), ("09:50:15", "Sell", 1, "7622.25"), ("09:50:37", "Sell", 1, "7614.00"),
-    ("10:00:07", "Buy", 2, "7599.25"), ("12:01:33", "Sell", 2, "7457.50"),
-    ("13:42:51", "Buy", 2, "7409.75"), ("14:04:25", "Sell", 2, "7397.25"),
-    ("14:13:45", "Buy", 2, "7421.50"), ("14:21:30", "Sell", 2, "7414.50"),
-    ("14:40:02", "Buy", 1, "7420.75"), ("14:40:02", "Buy", 1, "7420.75"), ("15:02:48", "Sell", 2, "7429.00"),
-    ("15:07:09", "Sell", 2, "7419.75"), ("15:11:34", "Buy", 1, "7401.25"), ("15:19:24", "Buy", 1, "7411.75"),
+    ("09:46:56", "Buy", 1, "5810.00"), ("09:47:52", "Sell", 1, "5815.50"),
+    ("09:49:21", "Buy", 2, "5812.25"), ("09:50:15", "Sell", 1, "5818.00"), ("09:50:37", "Sell", 1, "5809.75"),
+    ("10:00:07", "Buy", 2, "5805.50"), ("12:01:33", "Sell", 2, "5798.25"),
+    ("13:42:51", "Buy", 2, "5790.00"), ("14:04:25", "Sell", 2, "5794.75"),
+    ("14:13:45", "Buy", 2, "5796.50"), ("14:21:30", "Sell", 2, "5793.00"),
+    ("14:40:02", "Buy", 1, "5788.25"), ("14:40:02", "Buy", 1, "5788.25"), ("15:02:48", "Sell", 2, "5797.50"),
+    ("15:07:09", "Sell", 2, "5801.00"), ("15:11:34", "Buy", 1, "5796.25"), ("15:19:24", "Buy", 1, "5799.50"),
 ]
-SCHWAB_GROSS = [-712.5, 587.5, -14175.0, -1250.0, -700.0, 825.0, 1325.0]
+EXPECTED_GROSS = [275.0, 162.5, -725.0, 475.0, -350.0, 925.0, 312.5]
 FEE_PER_CONTRACT = 3.64
 
 
@@ -71,7 +70,7 @@ def topstepx_day():
     (ninja_day, "ninjatrader", True),
     (topstepx_day, "topstepx", True),
 ])
-def test_es_day_matches_the_schwab_statement(make, key, fees):
+def test_es_day_gives_the_same_trades_in_every_format(make, key, fees):
     content = make()
     assert detect_broker(content) == key
     warnings = []
@@ -79,8 +78,8 @@ def test_es_day_matches_the_schwab_statement(make, key, fees):
     assert skipped == 0
     assert {t["ticker"] for t in trades} == {"/ESZ26"}
     assert {t["instrument_type"] for t in trades} == {"FUTURE"}
-    assert gross_in_order(trades) == SCHWAB_GROSS
-    assert sum(t["gross_pnl"] for t in trades) == -14100.0
+    assert gross_in_order(trades) == EXPECTED_GROSS
+    assert sum(t["gross_pnl"] for t in trades) == sum(EXPECTED_GROSS)
     contracts = sum(q for _, _, q, _ in ES_DAY)
     assert round(sum(t["commissions"] for t in trades), 2) == (round(FEE_PER_CONTRACT * contracts, 2) if fees else 0)
     assert bool(warnings) is (not fees)
@@ -88,7 +87,7 @@ def test_es_day_matches_the_schwab_statement(make, key, fees):
 
 def test_tradovate_oldest_first_gives_the_same_trades():
     trades, _ = parse_broker_csv(tradovate_day(newest_first=False), "tradovate", account_id=1)
-    assert gross_in_order(trades) == SCHWAB_GROSS
+    assert gross_in_order(trades) == EXPECTED_GROSS
 
 
 def test_file_timezone_is_converted_to_eastern():
@@ -344,8 +343,8 @@ def test_regrouping_keeps_the_point_value_a_trade_was_booked_with(client):
 
 def test_zone_is_saved_only_for_exports_that_use_it(client):
     tos = ("Account Statement\n\nCash Balance\nDATE,TIME,TYPE,REF #,DESCRIPTION,Misc Fees,Commissions & Fees,AMOUNT,BALANCE\n"
-           '11/5/26,09:46:16,TRD,="1",BOT +10 TSLA @361.11,,,"-3,611.10","1"\n'
-           '11/5/26,09:50:48,TRD,="2",SOLD -10 TSLA @362.11,,,"3,621.10","1"\n')
+           '11/5/26,09:46:16,TRD,="1",BOT +10 TSLA @361.00,,,"-3,610.00","1"\n'
+           '11/5/26,09:50:48,TRD,="2",SOLD -10 TSLA @362.00,,,"3,620.00","1"\n')
     assert post(client, tos, broker="auto", timezone="America/Chicago").status_code == 200
     conn = sqlite3.connect(client.db)
     assert conn.execute("SELECT import_timezone FROM accounts WHERE id=1").fetchone()[0] is None

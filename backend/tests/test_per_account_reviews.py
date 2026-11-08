@@ -4,9 +4,9 @@
 
 trade_group names carry no account (csv_parser.trade_group_key builds
 {date}_{ticker}_{instr}_{seq}), so two accounts trading the same ticker on the same
-day get the same name. On 5 Nov 2026 Main (1) and Futures (4) both got
+day get the same name: two accounts that both trade /ES on one day each get
 11/5/26_/ESZ26_FUTURE_1 and _2. trade_analysis and trade_tags used to be keyed by
-the name alone, so those trades would have shared one set of notes.
+the name alone, so those trades would have shared one set of notes. All data synthetic.
 """
 import json
 import sqlite3
