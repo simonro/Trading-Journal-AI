@@ -17,6 +17,7 @@ your days on process.
 - **Thinkorswim and Interactive Brokers** importers, seven more in beta (Tradovate, NinjaTrader,
   TopstepX, Webull, tastytrade, TradeStation, Power E*TRADE), and a template for any other broker.
 - **Four looks**: Original, Minimal, Natural and Pro terminal, picked in Settings.
+- **One-command install**: `docker compose up -d`, or a setup script on Windows, Mac and Linux.
 - **Free and MIT licensed.** No paid tier.
 
 **[Quick start](#quick-start)** · **[Watch the walkthrough](https://www.youtube.com/watch?v=rsNizd9niG4)** · **[Releases](https://github.com/simonro/Trading-Journal-AI/releases)** · **[Privacy](#privacy-and-your-data)**
@@ -72,7 +73,7 @@ calculation never downloads anything by itself.
 **Try it on synthetic trades.** The demo builds its own database,
 `backend/exitlab_demo.db`, labeled **Synthetic trades, historical market prices**: generated
 trades on real historical minute prices for SPY, QQQ and NVDA. Your journal database is
-not opened. After `setup.bat` and your Alpaca keys, double-click
+not opened. After `setup.bat` (a local install, not Docker) and your Alpaca keys, double-click
 `scripts\launch_exitlab_demo.bat`, then open http://localhost:3020 and choose the
 "Exit Lab demo" account. The first run takes about two minutes to download the prices.
 By hand on any OS, with the virtualenv active:
@@ -161,11 +162,17 @@ the ticker (plus SPY for Exit Lab) and the date range, nothing about your trades
 **Update check (GitHub)**
 
 When the backend starts, it asks GitHub's public releases page whether a newer version exists, at
-most once a day (the answer is cached in `backend/update_check.json`). That is one anonymous request
+most once a day (the answer is cached in `backend/update_check.json`, or in the data volume under Docker). That is one anonymous request
 to `api.github.com`: GitHub sees your IP address and the app version, nothing about your trades,
 keys or settings. If a newer release exists you get a notice in the app and a line in the backend
 window; nothing is ever downloaded or installed for you. Offline, it stays silent. Turn it off with
 `UPDATE_CHECK=0` in `backend/.env`.
+
+**Docker (only if you use it)**
+
+`docker compose up` downloads the official Python, Node and nginx base images from Docker Hub the
+first time, like any Docker build. Nothing about you or your trades is sent; your data stays in a
+volume on your computer.
 
 ### API keys
 
@@ -253,15 +260,61 @@ Natural and Pro terminal. Only colors, fonts and chart style change; every page 
 
 ## Quick start
 
-Requirements: [Python 3.11+](https://www.python.org/downloads/) and [Node.js 18+](https://nodejs.org/) (the current LTS is recommended).
+Pick one. Every install starts on http://localhost:3010.
 
-**Windows, two steps:** download or clone the repo, then double-click
+### Option 1: Docker, one command
 
-1. `setup.bat`, once. It creates the Python environment, installs everything and creates
-   `backend\.env` for your optional keys.
-2. `launch.bat`, every time. Then open http://localhost:3010
+Needs [Git](https://git-scm.com/downloads) and [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(Windows, Mac), or on Linux Docker Engine with the
+[Compose plugin](https://docs.docker.com/compose/install/linux/) 2.24 or newer (`docker compose version`).
+No Python or Node on your machine.
 
-**Manual setup (Mac, Linux, or if you prefer):**
+```bash
+git clone https://github.com/simonro/Trading-Journal-AI.git
+cd Trading-Journal-AI
+docker compose up -d
+```
+
+Open http://localhost:3010. The first start builds the app, which takes a few minutes; later starts
+take seconds. It keeps running in the background and comes back after a reboot whenever Docker is
+running. Stop it with `docker compose down`.
+
+- **Your trades** live in the `journal-data` Docker volume, not in the folder, so updating or
+  deleting the folder never touches them. Only `docker compose down -v` deletes the volume, and
+  with it your journal.
+- **API keys** (optional): copy `.env.example` to `backend/.env`, fill in the keys, then run
+  `docker compose up -d` again.
+- **Backup**: stop the backend so SQLite finishes writing, copy the whole data folder (database and
+  uploaded diary images), then start it again:
+
+  ```bash
+  docker compose stop backend
+  docker compose cp backend:/data ./journal-backup
+  docker compose start backend
+  ```
+- **Other ports**: set `JOURNAL_PORT` (frontend) and `JOURNAL_API_PORT` (backend) before
+  `docker compose up -d --build`. The backend address is built into the frontend, so a port change
+  needs the `--build`.
+- Both ports listen on `127.0.0.1` only. The journal has no login, so other machines cannot reach it.
+
+Docker is the easy way to run the journal. If you want to change the code with Claude Code (see
+[Make it yours](#make-it-yours-with-claude-code)), use option 2: edits show up instantly there,
+while Docker needs a rebuild after each change.
+
+### Option 2: setup script (Windows, Mac, Linux)
+
+Needs [Python 3.11+](https://www.python.org/downloads/) and [Node.js 18+](https://nodejs.org/) (the
+current LTS is recommended). Download or clone the repo, then:
+
+| | Windows | Mac and Linux |
+|---|---|---|
+| Once | double-click `setup.bat` | `bash setup.sh` |
+| Every time | double-click `launch.bat` | `bash launch.sh` (Ctrl+C stops it) |
+
+Setup creates the Python environment in `.venv`, installs everything and creates `backend/.env` for
+your optional keys. Running it again is safe. Then open http://localhost:3010.
+
+**By hand, if you prefer:**
 
 ```bash
 # 1. Python environment + backend dependencies
@@ -273,12 +326,11 @@ pip install -r backend/requirements.txt
 cd frontend
 npm ci
 cd ..
-
-# 3. Run both (Windows; launch.bat picks up .venv automatically)
-launch.bat
 ```
 
-`launch.bat` starts the FastAPI backend on http://localhost:8010 and the React frontend on http://localhost:3010. On Mac/Linux run them manually: `python -m uvicorn main:app --reload --port 8010` from `backend/`, and `PORT=3010 npm start` from `frontend/`.
+Then start the FastAPI backend on port 8010 from `backend/` with
+`python -m uvicorn main:app --reload --port 8010`, and the React frontend on port 3010 from
+`frontend/` with `PORT=3010 npm start` (on Windows: `set PORT=3010&& npm start`).
 
 To run them on other ports, tell each side about the other: `REACT_APP_API_URL` for the frontend,
 and, only if the frontend is not on localhost, `FRONTEND_ORIGINS` (comma separated) for the
@@ -297,13 +349,22 @@ Your trades live in `backend/trading_journal.db` and your keys in `backend/.env`
 a release, so an update never touches them. New tables are created on the first start and nothing
 existing is rewritten.
 
-**If you cloned with git:**
+**Docker:**
 
 ```bash
 git pull
-pip install -r backend/requirements.txt   # only if requirements changed
-cd frontend && npm install && cd ..       # only if package.json changed
-launch.bat
+docker compose up -d --build
+```
+
+Your trades stay in the `journal-data` volume. Copy a backup out first (command in
+[Quick start](#quick-start)) if you have trades you care about.
+
+**If you cloned with git (setup script install):**
+
+```bash
+git pull
+setup.bat          # Mac/Linux: bash setup.sh. Installs whatever changed, safe to repeat
+launch.bat         # Mac/Linux: bash launch.sh
 ```
 
 **If you downloaded the ZIP:** unzip the new version into a new folder, then copy your two files
@@ -315,7 +376,7 @@ copy old-folder\backend\trading_journal.db new-folder\backend\trading_journal.db
 xcopy /e /i old-folder\backend\uploads     new-folder\backend\uploads
 ```
 
-Then run `npm install` in `frontend/` once and start it with `launch.bat`.
+Then run `setup.bat` (`bash setup.sh` on Mac/Linux) once in the new folder and start it with `launch.bat` (`bash launch.sh`).
 
 Back up `trading_journal.db` first if you have trades you care about. It is a single SQLite file, so
 copying it somewhere safe is the whole backup.

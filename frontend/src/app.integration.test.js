@@ -545,6 +545,18 @@ test('a newer release shows a dismissible update notice with the update steps', 
   expect(localStorage.getItem('update-banner-dismissed')).toBe('1.6.0');
 });
 
+test('a Docker install shows the Docker update steps', async () => {
+  localStorage.clear();
+  updateApi.get.mockImplementation(() => Promise.resolve({ data: {
+    current: '1.6.0', latest: '1.7.0', available: true, install: 'docker',
+    url: 'https://github.com/simonro/Trading-Journal-AI/releases/tag/v1.7.0',
+  } }));
+  render(<App />);
+  const notice = (await screen.findByText('Version 1.7.0 is available')).closest('[role="status"]');
+  expect(within(notice).getByText('docker compose up -d --build')).toBeInTheDocument();
+  expect(within(notice).queryByText('setup.bat')).not.toBeInTheDocument();
+});
+
 test('no update notice when the installed version is current', async () => {
   render(<App />);
   await waitFor(() => expect(updateApi.get).toHaveBeenCalled());

@@ -1,0 +1,44 @@
+# One-command install: docker compose up -d   then open http://localhost:3010
+#
+# Your trades live in the journal-data volume, not in this folder, so updating
+# (git pull, then docker compose up -d --build) never touches them.
+# Both ports are bound to 127.0.0.1: the journal has no login, so it is only reachable from this
+# computer.
+name: trading-journal-ai
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: trading-journal-ai-backend
+    env_file:
+      - path: backend/.env
+        required: false
+    # Pinned here so a DATABASE_PATH or UPLOAD_DIR left in backend/.env from a local install cannot
+    # move your trades out of the volume.
+    environment:
+      DATABASE_PATH: /data/trading_journal.db
+      UPLOAD_DIR: /data/uploads
+      UPDATE_CHECK_CACHE: /data/update_check.json
+    volumes:
+      - journal-data:/data
+    ports:
+      - "127.0.0.1:${JOURNAL_API_PORT:-8010}:8010"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        REACT_APP_API_URL: ${JOURNAL_API_URL:-http://localhost:${JOURNAL_API_PORT:-8010}}
+    image: trading-journal-ai-frontend
+    ports:
+      - "127.0.0.1:${JOURNAL_PORT:-3010}:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  journal-data:

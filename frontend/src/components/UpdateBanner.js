@@ -44,11 +44,18 @@ export default function UpdateBanner() {
       <div>
         <strong>Version {update.latest} is available</strong> (you have {update.current}).{' '}
         <a href={update.url} target="_blank" rel="noopener noreferrer">Release notes</a>
-        <div className="update-banner-steps">
-          To update: <code>git pull</code>, then run <code>setup.bat</code>. Downloaded the ZIP? Unzip the
-          new version and copy <code>backend/.env</code>, <code>backend/trading_journal.db</code> and
-          the <code>backend/uploads</code> folder into it.
-        </div>
+        {update.install === 'docker' ? (
+          <div className="update-banner-steps">
+            To update: <code>git pull</code>, then <code>docker compose up -d --build</code>. Your trades
+            stay in the <code>journal-data</code> volume.
+          </div>
+        ) : (
+          <div className="update-banner-steps">
+            To update: <code>git pull</code>, then run <code>setup.bat</code> (<code>setup.sh</code> on Mac
+            or Linux). Downloaded the ZIP? Unzip the new version and copy <code>backend/.env</code>,{' '}
+            <code>backend/trading_journal.db</code> and the <code>backend/uploads</code> folder into it.
+          </div>
+        )}
       </div>
       <button type="button" className="update-banner-close" onClick={dismiss} aria-label="Dismiss update notice">×</button>
     </div>
