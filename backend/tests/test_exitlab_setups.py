@@ -82,7 +82,7 @@ def test_either_field_matches_and_display_prefers_strategy(db):
         client.post('/api/exitlab/history',json={'account_id':1})
         db.execute("UPDATE trade_analysis SET strategy=NULL")
         db.commit()
-        assert client.get('/api/exitlab/trades/1/simple').json()['rows'][0]['setup_name'] == 'Leader Long (B)'
+        assert client.get('/api/exitlab/trades/1/simple').json()['rows'][0]['setup_name'] == 'Setup B'
 
 
 def test_migration_idempotent_rules_and_policy_preservation(db):

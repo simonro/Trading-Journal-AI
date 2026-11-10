@@ -19,7 +19,7 @@ test('picker groups names, labels auto codes, shows zero counts and searches abo
   const strategies = screen.getByRole('region', { name: 'Strategies' });
   const autos = screen.getByRole('region', { name: 'Auto setups' });
   expect(within(strategies).getByRole('button', { name: 'A 0 trades · 0 eligible' })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(within(autos).getByRole('button', { name: 'Flush Reclaim (A) 8 trades · 3 eligible' }));
+  fireEvent.click(within(autos).getByRole('button', { name: 'Setup A 8 trades · 3 eligible' }));
   expect(change).toHaveBeenCalledWith([{ group: 'strategy', name: 'A' }, { group: 'auto', name: 'A' }]);
   expect(within(autos).getByText('UNKNOWN')).toBeVisible();
   fireEvent.change(screen.getByLabelText('Search setups'), { target: { value: 'flush' } });
@@ -34,9 +34,9 @@ test('small picker needs no search and assignment chips render typed values', ()
     <SetupChips value={[{ group: 'auto', name: 'B_LITE' }, { group: 'strategy', name: 'VWAP Cross' }]} /></>);
   expect(screen.queryByLabelText('Search setups')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Saved unused 0 trades · 0 eligible' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByText('Leader Long Lite (B_LITE)')).toBeVisible();
+  expect(screen.getByText('Setup B lite')).toBeVisible();
   expect(screen.getByText('VWAP Cross')).toBeVisible();
-  expect(setupOf({ journal_trade: { setup: 'A' } })).toBe('Flush Reclaim (A)');
+  expect(setupOf({ journal_trade: { setup: 'A' } })).toBe('Setup A');
   expect(setupOf({ journal_trade: { setup: 'A', strategy: 'VWAP Cross' } })).toBe('VWAP Cross');
 });
 const options = [{ group: 'strategy', label: 'Strategies', items: [{ name: 'LOD Reversal', trades: 3, eligible: 2 }, { name: 'Opening Drive', trades: 2, eligible: 1 }] }, { group: 'auto', label: 'Auto setups', items: [] }];
