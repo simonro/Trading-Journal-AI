@@ -79,6 +79,12 @@ export const diaryApi = {
   deleteByDate: (date, accountId) => api.delete(`/api/diary/by-date/${date}`, { params: accountId != null ? { account_id: accountId } : {} }),
 };
 
+// Edge Trader Sync: one trade's stop, target and note events (backend/edge_sync.py).
+export const edgeSyncApi = {
+  tradeEvents: (group, accountId) =>
+    api.get('/api/sync/trade-events', { params: { trade_group: group, account_id: accountId } }),
+};
+
 export const chartApi = {
   get: (ticker, date, timeframe = '1Min', daysBack = 1) =>
     api.get(`/api/chart/${encodeURIComponent(ticker)}/${date}`, { params: { timeframe, days_back: daysBack } }),

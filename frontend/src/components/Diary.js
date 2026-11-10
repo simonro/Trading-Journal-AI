@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronUp, BookOpen, Trash2 } from 'lucide-react';
 import { diaryApi, API_BASE } from '../api';
 import { PageHeader } from './ui';
+import EdgeDayNote, { isEdgeDayNote } from './EdgeDayNote';
 
 const BACKEND = API_BASE;
 
@@ -233,7 +234,8 @@ export default function Diary({ accountId }) {
 
   const removeEntry = (id) => setEntries(prev => prev.filter(e => e.id !== id));
 
-  const removeDate = (date) => setEntries(prev => prev.filter(e => e.entry_date !== date));
+  // Deleting a day's entries leaves its Edge Trader day note, as the server does.
+  const removeDate = (date) => setEntries(prev => prev.filter(e => e.entry_date !== date || isEdgeDayNote(e)));
 
   // Group by date descending
   const byDate = entries.reduce((acc, e) => {
@@ -265,7 +267,7 @@ export default function Diary({ accountId }) {
         <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--text-secondary)' }}>
           <BookOpen size={40} style={{ marginBottom: 16, opacity: 0.6 }} />
           <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 8, color: 'var(--text-primary)' }}>No diary entries yet</div>
-          <div style={{ fontSize: 14 }}>Upload a diary screenshot on the Import page to get started.</div>
+          <div style={{ fontSize: 14 }}>Upload a diary screenshot on the Import page, or write a day note in Edge Trader and sync it.</div>
         </div>
       )}
 
@@ -288,8 +290,22 @@ export default function Diary({ accountId }) {
             )}
           </div>
 
+          {/* The Edge Trader day note leads the day, then the uploaded diaries */}
+          {(() => {
+            const notes = byDate[date].filter(isEdgeDayNote);
+            return notes.map(entry => (
+              <div key={entry.id} style={{ marginBottom: 'var(--space-3)' }}>
+                <EdgeDayNote
+                  entry={entry}
+                  accountLabel={notes.length > 1 ? `Account ${entry.account_id}` : null}
+                  actions={<DeleteButton label={`Delete the Edge Trader day note for ${date}`} onDelete={() => diaryApi.delete(entry.id).then(() => removeEntry(entry.id))} />}
+                />
+              </div>
+            ));
+          })()}
+
           {/* Individual entry cards */}
-          {byDate[date].map(entry => (
+          {byDate[date].filter(entry => !isEdgeDayNote(entry)).map(entry => (
             <DiaryCard
               key={entry.id}
               entry={entry}

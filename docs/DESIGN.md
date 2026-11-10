@@ -99,6 +99,13 @@ Recharts for the analytics, lightweight-charts for the trade chart. Neither reso
 in canvas, so `TradingChart.js` reads the tokens at render time with `getComputedStyle` and falls
 back to the token values. Axis ticks use `--text-secondary`, grids use `--divider-soft`.
 
+The trade chart draws Edge Trader events (see the README's Edge Trader section) on stock charts only,
+since an option's or future's chart shows the underlying: the stop history as a solid stepped line in
+`--level-stop`, the target history dashed in `--level-target`, a gap where an order was cancelled, and
+note pins as HTML over the canvas so each can be hovered and focused. A Timeline event pointed at in
+Trade Details gets a guide at its bar and, for stops and targets, a price line. Candles, fills and
+events share one US Eastern timeline with each day's real offset (EDT or EST).
+
 The dashboard equity curve shades drawdowns (the band between the dashed running high and the
 curve). Breakdown bars (Patterns, Year Behind) diverge from a zero line: profit grows right, loss
 grows left (`BarRow diverge`). Recharts tooltips that reuse `.card` add `.chart-tip` to get their

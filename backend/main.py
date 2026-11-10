@@ -13,6 +13,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Que
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -20,6 +21,8 @@ import httpx
 
 from database import init_db, get_db, row_to_dict, in_marks, DB_PATH
 from csv_parser import parse_broker_csv, detect_broker, FUTURES_MULTIPLIERS
+from trade_store import (IMPORT_LOCK, free_name, insert_trade, rebuilt_names,
+                         replace_regrouped_trades as _replace_regrouped_trades)
 from broker_formats import SourceAccountsError, DEFAULT_TIMEZONE, SPEC_BY_KEY
 from zoneinfo import ZoneInfo
 from ai_analysis import (
@@ -37,6 +40,7 @@ import leaks
 from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from exitlab.api import router as exitlab_router
+import edge_sync
 import update_check
 
 load_dotenv()
@@ -50,6 +54,7 @@ async def lifespan(app: FastAPI):
     _conn = get_db()
     try:
         init_library_tables(_conn)
+        edge_sync.init_sync_tables(_conn)
     finally:
         _conn.close()
     Path(UPLOAD_DIR).mkdir(exist_ok=True)
@@ -81,6 +86,8 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 # Settings > Library (strategies, sources, tags)
 app.include_router(library_router)
 app.include_router(exitlab_router)
+# Edge Trader for Schwab sync: acts only on a POST from Edge Trader's Apply (backend/edge_sync.py)
+app.include_router(edge_sync.router)
 
 
 @app.get("/api/update")
@@ -343,6 +350,7 @@ def delete_account(account_id: int, conn: sqlite3.Connection = Depends(get_conne
             if str(account_id) in key.rsplit("|accounts=", 1)[1].split(","):
                 conn.execute("DELETE FROM daily_summaries WHERE id=?", (sid,))
         conn.execute("DELETE FROM settings WHERE account_id=?", (account_id,))
+        edge_sync.forget_account(conn, account_id)
         conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         conn.commit()
     except Exception:
@@ -508,82 +516,6 @@ def setup_stats(
     return {"by_setup": agg('setup'), "by_grade": agg('setup_grade'), "labels": {}}
 
 
-def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None:
-    """Clear stored trades that an import regrouped with new fills (see overlapping_db_fills).
-
-    The review data (analysis and tags) of each old trade follows its fills to the new trade
-    holding most of them, even when the import reuses the old name for a different trade
-    (an earlier round trip imported later becomes _1 and pushes the old _1 to _2). A target
-    that already has review data of its own keeps it.
-    """
-    old_groups = {g for t in trades for g in t.get('replaces', [])}
-    if not old_groups:
-        return
-    new_keys = {t['trade_group'] for t in trades}
-
-    def fill_key(e):
-        # split_part tells the closing half of a reversal from the opening half
-        return (e.get('date'), e.get('time'), e.get('action'), e.get('price'), e.get('split_part'))
-
-    moves = {}
-    for g in old_groups:
-        holders = [t for t in trades if g in t.get('replaces', [])]
-        row = conn.execute("SELECT executions FROM trades WHERE trade_group=? AND account_id=?",
-                           (g, account_id)).fetchone()
-        fps = {fill_key(e) for e in json.loads((row[0] if row else None) or '[]')}
-        best = max(holders, key=lambda t: sum(fill_key(e) in fps for e in json.loads(t['executions'])))
-        if best['trade_group'] != g:
-            moves[g] = best['trade_group']
-    for g in old_groups - new_keys:
-        conn.execute("DELETE FROM trades WHERE trade_group=? AND account_id=?", (g, account_id))
-    if not moves:
-        return
-    # Two steps through temporary names, so swapped names (_1 <-> _2) never collide.
-    for g in moves:
-        for table in ("trade_analysis", "trade_tags"):
-            conn.execute(f"UPDATE {table} SET trade_group=? WHERE trade_group=? AND account_id=?",
-                         (f"__moving__{g}", g, account_id))
-    for g, target in moves.items():
-        temp = f"__moving__{g}"
-        conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=? AND account_id=?",
-                     (target, temp, account_id))
-        if conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=? AND account_id=?",
-                        (target, account_id)).fetchone():
-            _merge_review(conn, account_id, temp, target)
-        else:
-            conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=? AND account_id=?",
-                         (target, temp, account_id))
-
-
-_REVIEW_TEXT = ("entry_reason", "exit_reason", "mistakes", "notes", "ai_feedback", "match_notes")
-
-
-def _merge_review(conn, account_id: int, source: str, target: str) -> None:
-    """Two reviewed trades became one: keep the target's values, fill its blanks from the
-    source, and keep both texts, so nothing written is lost."""
-    src = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?",
-                       (source, account_id)).fetchone()
-    dst = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?",
-                       (target, account_id)).fetchone()
-    if not src or not dst:
-        return
-    updates = {}
-    for col in src.keys():
-        if col in ("id", "account_id", "trade_group", "ticker", "date"):
-            continue
-        a, b = dst[col], src[col]
-        if b in (None, '') or b == a:
-            continue
-        if col in _REVIEW_TEXT and a not in (None, ''):
-            updates[col] = f"{a}\n\n{b}"   # keep both texts
-        elif a in (None, ''):
-            updates[col] = b                # fill the target's blanks; its own values win
-    if updates:
-        sets = ", ".join(f"{c}=?" for c in updates)
-        conn.execute(f"UPDATE trade_analysis SET {sets} WHERE id=?", (*updates.values(), dst["id"]))
-    conn.execute("DELETE FROM trade_analysis WHERE id=?", (src["id"],))
-
-
 @app.post("/api/import-csv")
 async def import_csv(
     account_id: int = Form(...),
@@ -615,6 +547,25 @@ async def import_csv(
         content = raw.decode('latin-1')
 
     warnings: list[str] = []
+    # One import or sync at a time: both read the stored fills to decide what is new. In a worker
+    # thread, so waiting for the lock (an Edge Trader sync in progress) never stalls the server.
+    def locked_import():
+        with IMPORT_LOCK:
+            return _import_parsed(conn, content, broker, account_id, account, zone, timezone,
+                                  source_account, warnings)
+    skipped, imported, errors = await run_in_threadpool(locked_import)
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "warnings": warnings,
+        "message": (f"Imported {imported} trade group(s). "
+                    f"Skipped {skipped} duplicate execution(s)."),
+    }
+
+
+def _import_parsed(conn, content, broker, account_id, account, zone, timezone, source_account, warnings):
     trades, skipped = parse_broker_csv(content, broker, account_id, conn, timezone=zone,
                                        source_account=source_account.strip() or None,
                                        warnings=warnings,
@@ -640,29 +591,14 @@ async def import_csv(
 
     try:
         _replace_regrouped_trades(conn, account_id, trades)
+        taken: set = set()
+        rebuilt = rebuilt_names(trades)
         for trade in trades:
             try:
-                conn.execute("""
-                    INSERT INTO trades
-                        (account_id, trade_group, date, ticker, instrument_type, side,
-                         gross_pnl, net_pnl, commissions, executions,
-                         option_expiry, option_strike, option_type, source)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(trade_group, account_id) DO UPDATE SET
-                        date=excluded.date,
-                        side=excluded.side,
-                        gross_pnl=excluded.gross_pnl,
-                        net_pnl=excluded.net_pnl,
-                        commissions=excluded.commissions,
-                        executions=excluded.executions,
-                        imported_at=datetime('now')
-                """, (
-                    trade['account_id'], trade['trade_group'], trade['date'],
-                    trade['ticker'], trade['instrument_type'], trade['side'],
-                    trade['gross_pnl'], trade['net_pnl'], trade['commissions'],
-                    trade['executions'], trade['option_expiry'],
-                    trade['option_strike'], trade['option_type'], trade['source'],
-                ))
+                # Never overwrite a stored trade this import did not rebuild (a vertical or a
+                # trade edited in the journal): it takes the next free number instead.
+                trade['trade_group'] = free_name(conn, account_id, trade, taken, rebuilt)
+                insert_trade(conn, trade)
                 imported += 1
             except Exception as e:
                 if trade.get('replaces'):
@@ -672,18 +608,10 @@ async def import_csv(
         if save_zone:
             conn.execute("UPDATE accounts SET import_timezone=? WHERE id=?", (zone, account_id))
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
-
-    return {
-        "imported": imported,
-        "skipped": skipped,
-        "errors": errors,
-        "warnings": warnings,
-        "message": (f"Imported {imported} trade group(s). "
-                    f"Skipped {skipped} duplicate execution(s)."),
-    }
+    return skipped, imported, errors
 
 
 # ── Trades ─────────────────────────────────────────────────────────────────────
@@ -977,39 +905,44 @@ def _parse_exec_body(body: dict, fallback_date: str, previous: dict | None = Non
 
 @app.post("/api/trades/{trade_id}/executions")
 def add_execution(trade_id: int, body: dict, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    execs.append(_parse_exec_body(body, trade['date']))
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    # Reads, changes and rewrites the whole fill list: under the import lock, so a sync or import
+    # committing in between can never be overwritten by a list read before it.
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        execs.append(_parse_exec_body(body, trade['date']))
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.put("/api/trades/{trade_id}/executions/{exec_idx}")
 def update_execution(trade_id: int, exec_idx: int, body: dict, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    if exec_idx < 0 or exec_idx >= len(execs):
-        raise HTTPException(status_code=404, detail="Execution index out of range")
-    execs[exec_idx] = _parse_exec_body(body, trade['date'], execs[exec_idx] if 0 <= exec_idx < len(execs) else None)
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        if exec_idx < 0 or exec_idx >= len(execs):
+            raise HTTPException(status_code=404, detail="Execution index out of range")
+        execs[exec_idx] = _parse_exec_body(body, trade['date'], execs[exec_idx] if 0 <= exec_idx < len(execs) else None)
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.delete("/api/trades/{trade_id}/executions/{exec_idx}")
 def delete_execution(trade_id: int, exec_idx: int, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    if exec_idx < 0 or exec_idx >= len(execs):
-        raise HTTPException(status_code=404, detail="Execution index out of range")
-    execs.pop(exec_idx)
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        if exec_idx < 0 or exec_idx >= len(execs):
+            raise HTTPException(status_code=404, detail="Execution index out of range")
+        execs.pop(exec_idx)
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.delete("/api/trades/{trade_id}")
@@ -1021,6 +954,7 @@ def delete_trade(trade_id: int, conn: sqlite3.Connection = Depends(get_connectio
     trade = row_to_dict(row)
     key = (trade['trade_group'], trade['account_id'])
 
+    edge_sync.forget_trade(conn, trade['account_id'], trade['trade_group'])
     conn.execute("DELETE FROM trade_tags WHERE trade_group=? AND account_id=?", key)
     conn.execute("DELETE FROM trade_analysis WHERE trade_group=? AND account_id=?", key)
     conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
@@ -1042,12 +976,20 @@ def move_trade(trade_id: int, body: TradeAccountMove, conn: sqlite3.Connection =
     - Notes or tags in the target account under this name with no trade behind them (left by a
       re-import that renamed a trade) cannot be opened anywhere; they are cleared so the moved
       trade does not inherit them, and the reply counts them.
-    - The notes lose their link to the old account's diary entry, as an account delete does."""
+    - The notes lose their link to the old account's diary entry, as an account delete does.
+    - Edge Trader sync rows are un-anchored, as a delete does; the next sync re-attaches them
+      only if it covers the new account.
+    - Holds IMPORT_LOCK so an import or sync cannot write to the old name mid-move."""
+    with IMPORT_LOCK:
+        return _move_trade(conn, trade_id, body.account_id)
+
+
+def _move_trade(conn, trade_id: int, dst: int):
     row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Trade not found")
     trade = row_to_dict(row)
-    src, dst = trade['account_id'], body.account_id
+    src = trade['account_id']
     target = conn.execute("SELECT name FROM accounts WHERE id=?", (dst,)).fetchone()
     if not target:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -1068,6 +1010,8 @@ def move_trade(trade_id: int, body: TradeAccountMove, conn: sqlite3.Connection =
         for table in ("trade_analysis", "trade_tags"):
             cleared += conn.execute(f"DELETE FROM {table} WHERE trade_group=? AND account_id=?",
                                     (group, dst)).rowcount
+        edge_sync.forget_trade(conn, src, group)
+        edge_sync.move_fills(conn, src, dst, trade['executions'], row)
         conn.execute("UPDATE trade_analysis SET diary_entry_id=NULL WHERE trade_group=? AND account_id=?",
                      (group, src))
         for table in ("trade_analysis", "trade_tags"):
@@ -1548,7 +1492,9 @@ def delete_diary_by_date(
     account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    where = "entry_date=?"
+    # The day note written in Edge Trader is the trader's own text, not an uploaded diary:
+    # clearing the day's uploads leaves it (delete it by id to remove it).
+    where = f"entry_date=? AND COALESCE(source, '') <> '{edge_sync.SOURCE}'"
     params: list = [date]
     if account_id:
         where += f" AND account_id IN ({in_marks(account_id)})"
@@ -1621,6 +1567,9 @@ async def _fetch_alpaca_bars(client, url, base_params, headers, max_bars=5000):
     return bars
 
 
+_CHART_ET = ZoneInfo("America/New_York")
+
+
 @app.get("/api/chart/{ticker}/{date}")
 async def get_chart(
     ticker: str, date: str,
@@ -1670,8 +1619,9 @@ async def get_chart(
         start_day = trade_day - timedelta(days=days_back - 1)
         params = {
             "timeframe": tf,
-            "start": f"{start_day.isoformat()}T09:30:00-04:00",
-            "end": f"{date}T16:00:00-04:00",
+            # US Eastern with the real offset of each day (EDT -04:00, EST -05:00).
+            "start": datetime(start_day.year, start_day.month, start_day.day, 9, 30, tzinfo=_CHART_ET).isoformat(),
+            "end": datetime(trade_day.year, trade_day.month, trade_day.day, 16, 0, tzinfo=_CHART_ET).isoformat(),
             "limit": 1000,
             "feed": ALPACA_DATA_FEED,
             "adjustment": "raw",

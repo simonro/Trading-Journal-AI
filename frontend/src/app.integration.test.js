@@ -2,7 +2,7 @@
 // Settings library behaves. The api module is mocked, so no test reaches a backend.
 import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, reportsApi, leaksApi, updateApi, __restoreMocks } from './api';
+import { accountsApi, tradesApi, libraryApi, kpisApi, goalsApi, reportsApi, leaksApi, updateApi, diaryApi, edgeSyncApi, __restoreMocks } from './api';
 
 jest.mock('./api', () => {
   const ok = (data) => Promise.resolve({ data });
@@ -75,13 +75,14 @@ jest.mock('./api', () => {
     }),
     kpisApi: withDefault({ get: fn(() => ok({ total_net_pnl: 100, daily_pnl: [], by_strategy: [] })) }),
     importApi: withDefault({}),
-    diaryApi: withDefault({ list: fn(() => ok([])) }),
+    diaryApi: withDefault({ list: fn(() => ok([])), deleteByDate: fn(() => ok({ ok: true })) }),
     chartApi: withDefault({ get: fn(() => ok({ bars: [], warning: 'No chart data in tests' })) }),
     insightsApi: withDefault({}),
     calendarApi: withDefault({ get: fn(() => ok({ days: [] })) }),
     brainApi: withDefault({}),
     dailySummaryApi: withDefault({ get: fn(() => ok({ trades: [] })) }),
     syncApi: withDefault({}),
+    edgeSyncApi: withDefault({ tradeEvents: fn(() => ok({ events: [] })) }),
     goalsApi: withDefault({ get: fn(() => ok({ win_rate: 65 })), put: fn(() => ok({ win_rate: 65 })) }),
     reportsApi: withDefault({ get: fn(() => Promise.reject(new Error('no reports in tests'))) }),
     edgeReportApi: withDefault({}),
@@ -608,4 +609,73 @@ test('Day Review keeps a regenerated review when the first answer arrives late',
   await act(async () => { releaseFirst(); });
   expect(screen.getByText('Fresh review')).toBeInTheDocument();
   expect(screen.queryByText('Stale review')).not.toBeInTheDocument();
+});
+
+// ── Edge Trader sync: timeline, day note ──────────────────────────────────────
+
+const EDGE_EVENTS = [
+  { id: 'e1', ts: '2026-09-10T13:55:00+00:00', kind: 'stop_set', price: 365.5, qty: null, text: null, origin: 'schwab' },
+  { id: 'e2', ts: '2026-09-10T14:02:00+00:00', kind: 'stop_moved', price: 366.09, qty: null, text: null, origin: 'schwab' },
+  { id: 'n1', ts: '2026-09-10T14:05:00+00:00', kind: 'note', price: null, qty: null, text: 'Held the level', origin: 'edge' },
+];
+const DAY_NOTE = {
+  id: 7, account_id: 1, entry_date: '2026-09-10', raw_text: 'Plan: only A setups today.', image_path: null,
+  ai_analysis: null, source: 'edge-trader', updated_at: '2026-09-10 21:05:00',
+};
+const UPLOAD = { id: 8, account_id: 1, entry_date: '2026-09-10', raw_text: 'Uploaded notes', image_path: null, ai_analysis: null };
+
+async function openTrade() {
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
+  await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
+  // The click on the ticker reaches its row.
+  fireEvent.click((await screen.findAllByText('TSLA'))[0]);
+  return screen.findByRole('region', { name: 'Timeline' });
+}
+
+test('Trade Details lists the Edge Trader timeline in US Eastern time, and a click pins an event', async () => {
+  edgeSyncApi.tradeEvents.mockImplementation(() => Promise.resolve({ data: { events: EDGE_EVENTS } }));
+  const timeline = await openTrade();
+  expect(edgeSyncApi.tradeEvents).toHaveBeenCalledWith('9/10/26_TSLA_STOCK_1', 1);
+  expect(await within(timeline).findByText('Held the level')).toBeInTheDocument();
+  expect(within(timeline).getByText('Stop set')).toBeInTheDocument();
+  expect(within(timeline).getByText('09:55:00')).toBeInTheDocument();
+  const rows = within(timeline).getAllByRole('listitem');
+  expect(rows).toHaveLength(3);
+  const row = rows[1];
+  expect(row).toHaveTextContent('Stop moved to 366.09');
+  fireEvent.click(row);
+  expect(row).toHaveAttribute('aria-current', 'true');
+  fireEvent.click(row);
+  expect(row).not.toHaveAttribute('aria-current');
+});
+
+test('a trade with no synced events says how the timeline fills', async () => {
+  const timeline = await openTrade();
+  expect(await within(timeline).findByText(/No events for this trade yet/)).toBeInTheDocument();
+});
+
+test('the Diary shows the Edge Trader day note first and keeps it when the day is cleared', async () => {
+  diaryApi.list.mockImplementation(() => Promise.resolve({ data: [UPLOAD, DAY_NOTE] }));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Diary' }));
+  const note = await screen.findByRole('article', { name: 'Day note from Edge Trader' });
+  expect(within(note).getByText('Plan: only A setups today.')).toBeInTheDocument();
+  expect(within(note).getByText('From Edge Trader')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete all diary entries for 2026-09-10' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }));
+  await waitFor(() => expect(diaryApi.deleteByDate).toHaveBeenCalled());
+  expect(diaryApi.deleteByDate.mock.calls[0][0]).toBe('2026-09-10');
+  await waitFor(() => expect(screen.queryByText('Uploaded notes')).not.toBeInTheDocument());
+  expect(await screen.findByRole('article', { name: 'Day note from Edge Trader' })).toBeInTheDocument();
+});
+
+test('Day Review shows the Edge Trader day note for the day', async () => {
+  // Day Review opens on today.
+  const today = new Date().toISOString().split('T')[0];
+  diaryApi.list.mockImplementation(() => Promise.resolve({ data: [{ ...DAY_NOTE, entry_date: today }] }));
+  await renderApp();
+  fireEvent.click(within(nav()).getByRole('button', { name: 'Day Review' }));
+  const note = await screen.findByRole('region', { name: 'Day note from Edge Trader' });
+  expect(within(note).getByText('Plan: only A setups today.')).toBeInTheDocument();
 });

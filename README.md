@@ -127,6 +127,43 @@ zero, same account and date filters), so the two reconcile. With an Anthropic ke
 `leak_explanations` table under a hash of those numbers, so it reruns only when they change. Without
 a key the tab keeps its plain template sentences.
 
+## Sync from Edge Trader for Schwab
+
+[Edge Trader for Schwab](https://github.com/simonro/edge-trader-for-schwab) is a separate free app for
+placing and managing Schwab orders. It can send its side of your trading day to this journal: your
+Schwab fills, the strategy, source, tags, emotion, mistakes and reasons you picked for each trade, the
+notes you wrote during it, its stop and target changes, and your day note.
+
+- **Opt-in and click-only.** Nothing happens until you set the journal's address in Edge Trader and
+  press **Sync**. Sync first shows a preview of exactly what would change (new trades, fills already in
+  the journal, fields that would be written or that conflict with your edits). Nothing is written until
+  you press **Apply** on that preview.
+- **Backed up first, all or nothing.** Apply copies your database into a `sync-backups` folder next to
+  it (the last 10 are kept), then writes everything in one transaction. If the journal changed after
+  the preview, Apply is refused and you get a fresh preview instead.
+- **Your journal edits win.** A field you changed or cleared in the journal is never overwritten; the
+  preview lists it as a conflict. A tag or a day note you removed here stays removed (a day note
+  comes back only if you edit it again in Edge Trader).
+- **No duplicates.** Fills already in the journal, from an earlier sync or a Thinkorswim statement
+  import, are recognised and not added again, whichever comes first. Each instrument (stocks, options,
+  futures) goes to the journal account you pick, and the preview lets you send one trade elsewhere.
+  Two option legs filled together become one vertical at the net price, as in a statement import.
+- **What you see.** Trade Details gets a **Timeline** of the trade's stops, targets and notes (point at
+  an event to see it on the chart, click to keep it there), stock charts draw the stop and target
+  history, and the Diary and Day Review show your Edge Trader day note.
+
+**Point Edge Trader at the journal.** In Edge Trader's Journal settings, set the address to
+`http://127.0.0.1:8010` (the same for the setup-script and Docker installs; use your own port if you
+changed `JOURNAL_API_PORT`) and pick a journal account for each instrument. Edge Trader's own server
+sends the sync, not your browser, so no CORS or network settings change: the journal keeps listening on
+this computer only. For the same reason the journal refuses a sync request that comes from a web page
+(one that carries an `Origin` header), even a page served from this computer.
+
+The endpoint is `POST /api/sync/edge-trader` (`dry_run: true` returns the preview and a `state_token`;
+Apply sends the same request with `dry_run: false` and that token), with `GET /api/sync/info` for the
+version check. The code is `backend/edge_sync.py` and `backend/schwab_adapter.py`, tested in
+`backend/tests/test_edge_sync.py`.
+
 ## Privacy and your data
 
 Trading Journal AI is designed as a **local-first application**.
@@ -168,6 +205,14 @@ keys or settings. If a newer release exists you get a notice in the app and a li
 window; nothing is ever downloaded or installed for you. Offline, it stays silent. Turn it off with
 `UPDATE_CHECK=0` in `backend/.env`.
 
+**Edge Trader for Schwab sync (only if you use it)**
+
+A sync goes from Edge Trader, running on your computer, to the journal, also on your computer. With
+an Anthropic key set, Apply then asks Claude for short feedback on the trades that got new picks or
+notes, and fills blank fields (reasons, mistakes, emotion) only where your notes support them. For that,
+those trades' fills, stop and target events, your notes and the fields you filled in are sent to
+Anthropic's API. Without a key, the sync contacts nothing outside your computer.
+
 **Docker (only if you use it)**
 
 `docker compose up` downloads the official Python, Node and nginx base images from Docker Hub the
@@ -208,6 +253,7 @@ Trade reconstruction, P&L, commissions, statistics, and other core trading calcu
   between bars and full numeric tables, and rows under ten trades are marked thin so a one-trade
   strategy at 100% cannot sit at the top. A Leaks tab ranks what costs you money
   (see [Leak Finder](#leak-finder))
+- **Edge Trader sync**: fills, picks, notes, stop and target changes and a day note from Edge Trader for Schwab, on your click (see [Sync from Edge Trader for Schwab](#sync-from-edge-trader-for-schwab))
 - **Diary**: upload handwritten notes, screenshots, or typed text; Claude extracts strategy, stops, R-multiples, emotional state, and mistakes, and matches them to your actual trades
 - **Day Review**: the session drawn as one picture, running P&L from the open to the close with every
   trade marked where you entered it, plus an AI coaching report graded on process rather than P&L.
@@ -494,6 +540,7 @@ privately, as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
 Same rules for each one: free, MIT, runs on your own machine, and the build is on the [YouTube channel](https://www.youtube.com/@tapetoedge).
 
+- [Edge Trader for Schwab](https://github.com/simonro/edge-trader-for-schwab): order tickets, live R, break-even and trailing stops on the Schwab API, with an opt-in sync into this journal.
 - [Edge Scanner](https://github.com/simonro/edge-scanner): a real-time intraday stock scanner with a browser dashboard you lay out yourself.
 - [Edge GEX Lab](https://github.com/simonro/Edge-GEX-Lab): a live gamma exposure (GEX) map for SPY, QQQ, SPX, NDX and stocks, with walls, gamma flip and regime.
 - [AI Research Desk](https://github.com/simonro/ai-research-desk): three AI research teams debate one stock into swing and long-term calls.

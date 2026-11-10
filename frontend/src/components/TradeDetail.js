@@ -1,10 +1,12 @@
 import { excursionText } from '../utils/excursions';
 import { pointValue, loadPointValues } from '../pointValue';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { ArrowLeft, ChevronLeft, ChevronRight, PlusCircle, Trash2, Pencil } from 'lucide-react';
-import { tradesApi, chartApi } from '../api';
+import { tradesApi, chartApi, edgeSyncApi } from '../api';
 import TradingChart from './TradingChart';
 import TradeExits from './exitlab/TradeExits';
+import TradeTimeline from './TradeTimeline';
+import { prepareEvents } from './edgeEvents';
 import { DemoLabel } from './exitlab/shared';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
 import { sideInfo, sideLabel } from '../sideLabel';
@@ -275,6 +277,7 @@ function computeWhatIf(bars, stats, trade) {
 }
 
 const EMPTY_EXEC = { action: 'BOT', qty: '', price: '0.00', commission: '0.00', date: '', time: '' };
+const NO_EVENTS = [];
 
 // ── Main TradeDetail component ────────────────────────────────────────────────
 
@@ -382,6 +385,30 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
   useEffect(() => {
     tradesApi.getAnalysisOptions().then(r => setAnalysisOptions(r.data)).catch(() => {});
   }, []);
+
+  // Stop, target and note events synced from Edge Trader, for the Timeline and the chart.
+  const [eventsState, setEventsState] = useState({ status: 'loading', list: NO_EVENTS, error: null });
+  useEffect(() => {
+    let alive = true;
+    setEventsState({ status: 'loading', list: NO_EVENTS, error: null });
+    edgeSyncApi.tradeEvents(trade.trade_group, trade.account_id)
+      .then(r => { if (alive) setEventsState({ status: 'ok', list: r.data?.events || NO_EVENTS, error: null }); })
+      .catch(e => {
+        if (!alive) return;
+        // A journal without the sync endpoint simply has no events yet.
+        if (e.response?.status === 404) setEventsState({ status: 'ok', list: NO_EVENTS, error: null });
+        else setEventsState({ status: 'error', list: NO_EVENTS, error: e.response?.data?.detail || e.message });
+      });
+    return () => { alive = false; };
+  }, [trade.trade_group, trade.account_id]);
+  const timelineEvents = useMemo(() => prepareEvents(eventsState.list), [eventsState.list]);
+  // Stable across renders, so hovering the Timeline never rebuilds (and un-zooms) the chart.
+  const chartExecs = useMemo(() => parseExecs(trade), [trade]);
+  // Timeline event shown on the chart: the hovered or focused one, else the pinned one.
+  const [tlPreview, setTlPreview] = useState(null);
+  const [tlPinned, setTlPinned] = useState(null);
+  useEffect(() => { setTlPreview(null); setTlPinned(null); }, [timelineEvents]);
+  const pinTimelineEvent = (e) => setTlPinned(p => (p && (p.id ?? p._i) === (e.id ?? e._i) ? null : e));
 
   useEffect(() => {
     tradesApi.getAnalysis(trade.trade_group, trade.account_id).then(r => {
@@ -641,9 +668,12 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
             <TradingChart
               ticker={trade.ticker}
               date={trade.date}
-              executions={parseExecs(trade)}
+              executions={chartExecs}
               side={trade.side}
               analysis={analysis}
+              events={timelineEvents}
+              instrumentType={trade.instrument_type}
+              highlight={tlPreview || tlPinned}
               height={520}
             />
           </section>}
@@ -1099,8 +1129,18 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
           </div>
         </section>
 
-        {/* Beside the tabs: notes, tags, AI analysis, what-if */}
+        {/* Beside the tabs: Edge Trader timeline, notes, tags, AI analysis, what-if */}
         <div className="stack">
+          <TradeTimeline
+            status={eventsState.status}
+            events={timelineEvents}
+            tradeDate={trade.date}
+            error={eventsState.error}
+            pinned={tlPinned}
+            onPreview={setTlPreview}
+            onPin={pinTimelineEvent}
+          />
+
           {/* Strategy & notes */}
           {analysis && (analysis.entry_reason || analysis.exit_reason || analysis.mistakes) && (
             <section className="card">
