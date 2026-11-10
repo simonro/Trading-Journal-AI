@@ -172,7 +172,10 @@ def move_fills(conn, src: int, dst: int, executions_json: str, trade_row) -> Non
         execs = json.loads(executions_json or "[]")
     except ValueError:
         return
-    keys = {_key_of_stored(trade_row, e) for e in execs}
+    # A fill the journal split at a reversal is represented by its first half (StoredFills skips the
+    # second): its record follows the trade holding the first half, so moving the trade with the
+    # second half alone leaves it where the first half still is.
+    keys = {_key_of_stored(trade_row, e) for e in execs if e.get("split_part") in (None, 1)}
     for k in keys:
         conn.execute("UPDATE sync_fills SET account_id=? WHERE account_id=? AND match_key=?", (dst, src, k))
 
@@ -476,35 +479,51 @@ def _validate(conn, req: SyncRequest) -> None:
                 raise HTTPException(422, f"Unknown tag type '{t}'.")
 
 
-def _open_single_legs(conn, accounts, ex) -> bool:
-    """Does the journal hold an open single-leg position in either contract of this vertical?"""
-    ids = sorted(set(accounts))
-    if not ids:
+def _group_strikes(trade_group: str) -> set:
+    """Both strikes of a vertical from its name ('..._600-595_PUT_1')."""
+    out = set()
+    for part in trade_group.split("_")[-3].split("-"):
+        try:
+            out.add(round(float(part), 6))
+        except ValueError:
+            pass
+    return out
+
+
+def _open_single_legs(conn, account, ex) -> bool:
+    """Does the account this vertical goes to hold either of its contracts as an open single-leg
+    position, and no open vertical on the same two contracts (which the fill then belongs to)?"""
+    if account is None:
         return False
     rows = conn.execute(
-        f"SELECT trade_group, option_strike, executions FROM trades WHERE account_id IN ({','.join('?' * len(ids))}) "
-        f"AND instrument_type='OPTION' AND ticker=? AND option_expiry=? AND option_type=?",
-        (*ids, ex["ticker"], ex["option_expiry"], ex["option_type"])).fetchall()
+        "SELECT trade_group, option_strike, executions FROM trades WHERE account_id=? AND instrument_type='OPTION' "
+        "AND ticker=? AND option_expiry=? AND option_type=?",
+        (account, ex["ticker"], ex["option_expiry"], ex["option_type"])).fetchall()
+    strikes = {round(float(ex["option_strike"]), 6), round(float(ex["option_strike2"]), 6)}
+    single = False
     for r in rows:
-        if _is_vertical_group(r["trade_group"]) or r["option_strike"] is None:
-            continue
-        if not any(abs(float(r["option_strike"]) - float(k)) < 1e-9 for k in (ex["option_strike"], ex["option_strike2"])):
-            continue
         try:
             execs = json.loads(r["executions"] or "[]")
         except ValueError:
             continue
         held = sum((e.get("qty", 0) or 0) * (1 if e.get("action") == "BOT" else -1) for e in execs)
-        if abs(held) > 1e-6:
-            return True
-    return False
+        if abs(held) <= 1e-6:
+            continue
+        if _is_vertical_group(r["trade_group"]):
+            if _group_strikes(r["trade_group"]) == strikes:
+                return False
+        elif r["option_strike"] is not None and round(float(r["option_strike"]), 6) in strikes:
+            single = True
+    return single
 
 
-def _keep_known_legs(conn, accounts, execs: list[dict], kept: list[dict], seen: dict, plan: Plan) -> list[dict]:
+def _keep_known_legs(conn, req: SyncRequest, execs: list[dict], kept: list[dict], seen: dict, plan: Plan) -> list[dict]:
     """A vertical stays as single legs when an earlier sync already stored one of its legs on its own
     (it saw that leg before the other one was listed), so the stored leg is recognised and not booked
     again, and when the journal holds either contract as an open single-leg position, so a closing
-    vertical closes those legs instead of opening a vertical beside them."""
+    vertical closes those legs instead of opening a vertical beside them. That is decided in the account
+    the fill goes to (its pick, else the option route), and an open vertical there on the same two
+    contracts keeps it a vertical."""
     by_key = {}
     for t in kept:
         for i in range(max(1, len(sa._legs(t)))):
@@ -521,7 +540,8 @@ def _keep_known_legs(conn, accounts, execs: list[dict], kept: list[dict], seen: 
             continue
         if any(k and k["status"] in ("new", "already", "covered") and k["match_key"] != mk for k in known):
             why = "an earlier sync already stored one leg on its own"
-        elif _open_single_legs(conn, accounts, ex):
+        elif _open_single_legs(conn, next((req.account_overrides[fk] for fk in ex["_fill_keys"]
+                                           if fk in req.account_overrides), req.routes.get("OPTION")), ex):
             why = "the journal holds its contracts as single-leg positions"
         else:
             out.append(ex)
@@ -579,8 +599,7 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             payload_by_key[fk] = _hash(t)
     execs, problems = sa.transactions_to_executions(kept)
     plan.problems.extend(problems)
-    execs = _keep_known_legs(conn, set(req.dedup_accounts) | set(req.routes.values())
-                             | set(req.account_overrides.values()), execs, kept, seen, plan)
+    execs = _keep_known_legs(conn, req, execs, kept, seen, plan)
 
     # A pick for an account that no longer exists falls back to the route and is reported, so an old
     # pick can never block every sync.

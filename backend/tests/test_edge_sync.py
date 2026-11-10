@@ -1014,3 +1014,34 @@ def test_non_finite_numbers_are_refused(client, body):
     payload = json.dumps({**BASE, "transactions": DAY, "annotations": [ANN], **body})   # NaN as Python writes it
     r = client.post("/api/sync/edge-trader", content=payload, headers={"Content-Type": "application/json"})
     assert r.status_code == 422, r.text
+
+
+def test_a_single_leg_in_another_account_never_splits_a_closing_vertical(client):
+    """Pass 3, high 1: the vertical is open in the account its close goes to; an unrelated single
+    595 put in another account (looked at for duplicates) does not split the close."""
+    opening = vertical("2026-11-04T15:13:02+0000", -1, 2.40, 1.10, 71, (61, 62))
+    other = option("2026-11-04T15:15:00+0000", "SPY   261104P00595000", 1, 1.00, aid=63)
+    apply(client, transactions=opening + [other], account_overrides={"63": 2})
+    closing = vertical("2026-11-04T15:40:00+0000", 1, 1.95, 0.80, 72, (64, 65))
+    out = apply(client, transactions=opening + [other] + closing, account_overrides={"63": 2})
+    assert out["fills"] == {"already": 2, "new": 1}
+    assert not any("separate legs" in p["reason"] for p in out["problems"])
+    rows = q(client, "SELECT account_id, trade_group, net_pnl, executions FROM trades ORDER BY account_id")
+    assert [(r["account_id"], "600-595" in r["trade_group"]) for r in rows] == [(1, True), (2, False)]
+    assert rows[0]["net_pnl"] == 15.0 and len(json.loads(rows[0]["executions"])) == 2
+
+
+@pytest.mark.parametrize("moved", ["SHORT", "LONG"])
+def test_moving_one_side_of_a_reversal_never_lets_it_cover_a_later_fill(client, moved):
+    """Pass 3, high 2: a fill that flipped the position is split between two trades. Moving either
+    one keeps the whole fill counted as synced, so a later sale at that price is new."""
+    flip = [stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=9001),
+            stock("2026-11-04T15:10:00+0000", "AMD", -200, 150.0, aid=9002)]
+    apply(client, transactions=flip)
+    (t,) = q(client, "SELECT id FROM trades WHERE side=?", moved)
+    assert client.patch(f"/api/trades/{t['id']}/account", json={"account_id": 2}).status_code == 200
+    later = stock("2026-11-04T17:00:00+0000", "AMD", -100, 150.0, aid=9003)
+    assert apply(client, transactions=[later])["fills"] == {"new": 1}
+    sold = sum(e["qty"] for t in q(client, "SELECT executions FROM trades")
+               for e in json.loads(t["executions"]) if e["action"] == "SOLD")
+    assert sold == 300
