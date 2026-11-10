@@ -4,7 +4,7 @@ from collections import Counter
 
 AUTO_LABELS = {
     "A": "Setup A", "B": "Setup B",
-    "B_LITE": "Setup B lite", "C": "Setup C",
+    "C": "Setup C",
     "NONE": "No setup",
 }
 

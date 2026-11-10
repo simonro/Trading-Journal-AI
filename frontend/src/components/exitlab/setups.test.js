@@ -31,10 +31,10 @@ test('picker groups names, labels auto codes, shows zero counts and searches abo
 
 test('small picker needs no search and assignment chips render typed values', () => {
   render(<><SetupSelect options={[]} value={[{ group: 'strategy', name: 'Saved unused' }]} onChange={() => {}} />
-    <SetupChips value={[{ group: 'auto', name: 'B_LITE' }, { group: 'strategy', name: 'VWAP Cross' }]} /></>);
+    <SetupChips value={[{ group: 'auto', name: 'B' }, { group: 'strategy', name: 'VWAP Cross' }]} /></>);
   expect(screen.queryByLabelText('Search setups')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Saved unused 0 trades · 0 eligible' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByText('Setup B lite')).toBeVisible();
+  expect(screen.getByText('Setup B')).toBeVisible();
   expect(screen.getByText('VWAP Cross')).toBeVisible();
   expect(setupOf({ journal_trade: { setup: 'A' } })).toBe('Setup A');
   expect(setupOf({ journal_trade: { setup: 'A', strategy: 'VWAP Cross' } })).toBe('VWAP Cross');
