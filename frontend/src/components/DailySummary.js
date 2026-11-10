@@ -70,23 +70,29 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
   const [cbDismissed, setCbDismissed] = useState(false);
-  const allTimeKpisRef = useRef(null);
+  const [allTimeKpis, setAllTimeKpis] = useState(null);
+  // Every load gets a number; a response that comes back after the user moved to another
+  // day or account is dropped instead of replacing what is on screen.
+  const requestRef = useRef(0);
+  const summaryRef = useRef(0);  // the newest summary request (first load or Regenerate) wins
 
   const today = new Date().toISOString().split('T')[0];
 
-  const fetchAllTimeKpis = useCallback(async () => {
-    if (allTimeKpisRef.current) return;
-    try {
-      const params = {};
-      if (accountId != null) params.account_id = accountId;
-      const res = await kpisApi.get(params);
-      allTimeKpisRef.current = res.data;
-    } catch (e) {
-      console.error('Failed to load all-time kpis', e);
-    }
+  // Lifetime numbers belong to the selected account(s): reload them when it changes.
+  useEffect(() => {
+    let alive = true;
+    setAllTimeKpis(null);
+    const params = {};
+    if (accountId != null) params.account_id = accountId;
+    kpisApi.get(params)
+      .then(res => { if (alive) setAllTimeKpis(res.data); })
+      .catch(e => console.error('Failed to load all-time kpis', e));
+    return () => { alive = false; };
   }, [accountId]);
 
   const fetchDay = useCallback(async (d) => {
+    const id = ++requestRef.current;
+    const current = () => id === requestRef.current;
     setLoading(true);
     setSummaryLoading(true);
     setSummary(null);
@@ -101,6 +107,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
         diaryApi.list(accountId != null ? { account_id: accountId } : {}),
       ]);
 
+      if (!current()) return;
       // Merge trade_analysis fields if present
       const rawTrades = tradesRes.data || [];
       setTrades(rawTrades);
@@ -112,31 +119,33 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
     } catch (e) {
       console.error('Failed to load day data', e);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
+    if (!current()) return;
 
     // Fetch AI summary separately (can be slow)
     try {
       const sumParams = { date: d };
       if (accountId != null) sumParams.account_id = accountId;
+      const sid = ++summaryRef.current;
       const sumRes = await dailySummaryApi.get(sumParams);
-      setSummary(sumRes.data);
+      if (current() && sid === summaryRef.current) {
+        setSummary(sumRes.data);
+        setSummaryLoading(false);
+      }
     } catch (e) {
       console.error('Failed to load summary', e);
-    } finally {
-      setSummaryLoading(false);
+      if (current()) setSummaryLoading(false);
     }
   }, [accountId]);
-
-  useEffect(() => {
-    fetchAllTimeKpis();
-  }, [fetchAllTimeKpis]);
 
   useEffect(() => {
     fetchDay(date);
   }, [date, fetchDay]);
 
   const handleRegenerate = async () => {
+    const id = requestRef.current;
+    const sid = ++summaryRef.current;
     setRegenerating(true);
     setSummaryLoading(true);
     setSummary(null);
@@ -144,12 +153,12 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       const params = { date, force: true };
       if (accountId != null) params.account_id = accountId;
       const res = await dailySummaryApi.get(params);
-      setSummary(res.data);
+      if (id === requestRef.current && sid === summaryRef.current) setSummary(res.data);
     } catch (e) {
       console.error('Regenerate failed', e);
     } finally {
       setRegenerating(false);
-      setSummaryLoading(false);
+      if (id === requestRef.current && sid === summaryRef.current) setSummaryLoading(false);
     }
   };
 
@@ -215,7 +224,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
             </div>
             <DayCurve trades={trades} onPick={(t) => onOpenDetail && onOpenDetail(t, trades)} />
           </div>
-          <DayMeasures kpis={kpis} trades={trades} summary={summary} allTime={allTimeKpisRef.current} />
+          <DayMeasures kpis={kpis} trades={trades} summary={summary} allTime={allTimeKpis} />
         </>
       )}
 

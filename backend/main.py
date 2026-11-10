@@ -1,5 +1,7 @@
 import os
+import re
 import json
+import uuid
 import sqlite3
 import threading
 import aiofiles
@@ -509,35 +511,77 @@ def setup_stats(
 def _replace_regrouped_trades(conn, account_id: int, trades: list[dict]) -> None:
     """Clear stored trades that an import regrouped with new fills (see overlapping_db_fills).
 
-    The review data (analysis and tags) of each old trade follows its fills: it stays put
-    when a new trade keeps the old name, otherwise it moves to the new trade holding most of
-    those fills, unless that trade already has its own.
+    The review data (analysis and tags) of each old trade follows its fills to the new trade
+    holding most of them, even when the import reuses the old name for a different trade
+    (an earlier round trip imported later becomes _1 and pushes the old _1 to _2). A target
+    that already has review data of its own keeps it.
     """
     old_groups = {g for t in trades for g in t.get('replaces', [])}
     if not old_groups:
         return
     new_keys = {t['trade_group'] for t in trades}
+
+    def fill_key(e):
+        # split_part tells the closing half of a reversal from the opening half
+        return (e.get('date'), e.get('time'), e.get('action'), e.get('price'), e.get('split_part'))
+
     moves = {}
-    for g in old_groups - new_keys:
+    for g in old_groups:
         holders = [t for t in trades if g in t.get('replaces', [])]
-        fps = {(e['date'], e['time'], e['action'], e['qty'], e['price'])
-               for e in json.loads(conn.execute(
-                   "SELECT executions FROM trades WHERE trade_group=? AND account_id=?",
-                   (g, account_id)).fetchone()[0] or '[]')}
-        best = max(holders, key=lambda t: sum(
-            (e['date'], e['time'], e['action'], e['qty'], e['price']) in fps
-            for e in json.loads(t['executions'])))
-        moves[g] = best['trade_group']
+        row = conn.execute("SELECT executions FROM trades WHERE trade_group=? AND account_id=?",
+                           (g, account_id)).fetchone()
+        fps = {fill_key(e) for e in json.loads((row[0] if row else None) or '[]')}
+        best = max(holders, key=lambda t: sum(fill_key(e) in fps for e in json.loads(t['executions'])))
+        if best['trade_group'] != g:
+            moves[g] = best['trade_group']
     for g in old_groups - new_keys:
         conn.execute("DELETE FROM trades WHERE trade_group=? AND account_id=?", (g, account_id))
+    if not moves:
+        return
+    # Two steps through temporary names, so swapped names (_1 <-> _2) never collide.
+    for g in moves:
+        for table in ("trade_analysis", "trade_tags"):
+            conn.execute(f"UPDATE {table} SET trade_group=? WHERE trade_group=? AND account_id=?",
+                         (f"__moving__{g}", g, account_id))
     for g, target in moves.items():
-        has_own = conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=? AND account_id=?",
-                               (target, account_id)).fetchone()
-        if not has_own:
+        temp = f"__moving__{g}"
+        conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=? AND account_id=?",
+                     (target, temp, account_id))
+        if conn.execute("SELECT 1 FROM trade_analysis WHERE trade_group=? AND account_id=?",
+                        (target, account_id)).fetchone():
+            _merge_review(conn, account_id, temp, target)
+        else:
             conn.execute("UPDATE trade_analysis SET trade_group=? WHERE trade_group=? AND account_id=?",
-                         (target, g, account_id))
-            conn.execute("UPDATE trade_tags SET trade_group=? WHERE trade_group=? AND account_id=?",
-                         (target, g, account_id))
+                         (target, temp, account_id))
+
+
+_REVIEW_TEXT = ("entry_reason", "exit_reason", "mistakes", "notes", "ai_feedback", "match_notes")
+
+
+def _merge_review(conn, account_id: int, source: str, target: str) -> None:
+    """Two reviewed trades became one: keep the target's values, fill its blanks from the
+    source, and keep both texts, so nothing written is lost."""
+    src = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?",
+                       (source, account_id)).fetchone()
+    dst = conn.execute("SELECT * FROM trade_analysis WHERE trade_group=? AND account_id=?",
+                       (target, account_id)).fetchone()
+    if not src or not dst:
+        return
+    updates = {}
+    for col in src.keys():
+        if col in ("id", "account_id", "trade_group", "ticker", "date"):
+            continue
+        a, b = dst[col], src[col]
+        if b in (None, '') or b == a:
+            continue
+        if col in _REVIEW_TEXT and a not in (None, ''):
+            updates[col] = f"{a}\n\n{b}"   # keep both texts
+        elif a in (None, ''):
+            updates[col] = b                # fill the target's blanks; its own values win
+    if updates:
+        sets = ", ".join(f"{c}=?" for c in updates)
+        conn.execute(f"UPDATE trade_analysis SET {sets} WHERE id=?", (*updates.values(), dst["id"]))
+    conn.execute("DELETE FROM trade_analysis WHERE id=?", (src["id"],))
 
 
 @app.post("/api/import-csv")
@@ -621,6 +665,8 @@ async def import_csv(
                 ))
                 imported += 1
             except Exception as e:
+                if trade.get('replaces'):
+                    raise  # its old rows were cleared: undo the whole import instead
                 errors.append({"trade_group": trade.get('trade_group'), "error": str(e)})
 
         if save_zone:
@@ -662,14 +708,36 @@ class TradeCreate(BaseModel):
     time: str | None = None
 
 
-def compute_manual_pnl(side: str, entry: float, exit_price: float | None, qty: int, commissions: float) -> tuple[float, float]:
+def point_value(instrument: str | None, ticker: str | None) -> float:
+    """Dollars per point per contract: 100 for an option, the futures table for a future
+    (longest root first, so /MES is not read as /ES), 1 for a stock."""
+    instrument = (instrument or 'STOCK').upper()
+    if instrument == 'OPTION':
+        return 100
+    if instrument == 'FUTURE':
+        t = (ticker or '').upper()
+        if t and not t.startswith('/'):
+            t = '/' + t
+        return next((FUTURES_MULTIPLIERS[k] for k in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True)
+                     if t.startswith(k.upper())), 1)
+    return 1
+
+
+def compute_manual_pnl(side: str, entry: float, exit_price: float | None, qty: int, commissions: float,
+                       multiplier: float = 1) -> tuple[float, float]:
     if exit_price is None:
         return 0.0, -commissions
     if side.upper() == 'LONG':
-        gross = (exit_price - entry) * qty
+        gross = (exit_price - entry) * qty * multiplier
     else:
-        gross = (entry - exit_price) * qty
+        gross = (entry - exit_price) * qty * multiplier
     return round(gross, 2), round(gross - commissions, 2)
+
+
+@app.get("/api/point-values")
+def get_point_values():
+    """The futures point-value table, so the Add Trade preview uses the same numbers."""
+    return {"option": 100, "futures": FUTURES_MULTIPLIERS}
 
 
 def _is_open_position(trade: dict) -> bool:
@@ -679,7 +747,24 @@ def _is_open_position(trade: dict) -> bool:
     exit_action  = 'SOLD' if side == 'LONG' else 'BOT'
     entry_qty = sum(e.get('qty', 0) for e in execs if e.get('action') == entry_action)
     exit_qty  = sum(e.get('qty', 0) for e in execs if e.get('action') == exit_action)
-    return entry_qty > 0 and entry_qty != exit_qty
+    return entry_qty > 0 and abs(entry_qty - exit_qty) >= 1e-6
+
+
+def _closed_trades(trades: list[dict]) -> list[dict]:
+    """Trades with a realised result. An open position has no outcome yet, so it must not
+    count as a breakeven trade in win rate, expectancy or profit factor."""
+    out = []
+    for t in trades:
+        execs = t.get('executions')
+        if isinstance(execs, str):
+            try:
+                execs = json.loads(execs or '[]')
+            except ValueError:
+                execs = []
+        realised = bool(t.get('gross_pnl'))  # a manual exit at $0 used to be stored with one fill
+        if realised or not _is_open_position({**t, 'executions': execs or []}):
+            out.append(t)
+    return out
 
 
 @app.get("/api/trades")
@@ -747,7 +832,8 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         raise ValueError(f"Account {data.account_id} not found")
 
     gross_pnl, net_pnl = compute_manual_pnl(
-        data.side, data.entry_price, data.exit_price, data.quantity, data.commissions
+        data.side, data.entry_price, data.exit_price, data.quantity, data.commissions,
+        point_value(data.instrument_type, data.ticker),
     )
 
     # Build a manual trade group key
@@ -761,7 +847,7 @@ def create_trade(data: TradeCreate, conn: sqlite3.Connection = Depends(get_conne
         'price': data.entry_price,
         'commission': data.commissions / 2,
     }
-    if data.exit_price:
+    if data.exit_price is not None:
         execution2 = {
             'time': trade_time,
             'action': 'SOLD' if data.side.upper() == 'LONG' else 'BOT',
@@ -839,23 +925,14 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
 
     entry_qty = sum(e['qty'] for e in entry_fills)
     exit_qty  = sum(e['qty'] for e in exit_fills)
-    is_open   = (entry_qty != exit_qty) or exit_qty == 0
+    is_open   = abs(entry_qty - exit_qty) >= 1e-6 or exit_qty == 0
 
     if is_open:
         gross_pnl, net_pnl = 0.0, 0.0
     else:
         avg_entry = sum(e['qty'] * e['price'] for e in entry_fills) / entry_qty
         avg_exit  = sum(e['qty'] * e['price'] for e in exit_fills)  / exit_qty
-        if instrument == 'OPTION':
-            multiplier = 100
-        elif instrument == 'FUTURE':
-            # Longest root first, so /SIL is not read as /SI.
-            multiplier = next(
-                (FUTURES_MULTIPLIERS[k] for k in sorted(FUTURES_MULTIPLIERS, key=len, reverse=True)
-                 if ticker.upper().startswith(k.upper())), 1
-            )
-        else:
-            multiplier = 1
+        multiplier = point_value(instrument, ticker)
         gross_pnl = (avg_entry - avg_exit if side == 'SHORT' else avg_exit - avg_entry) * entry_qty * multiplier
         commissions_total = sum(e.get('commission', 0) for e in execs)
         net_pnl   = round(gross_pnl - commissions_total, 2)
@@ -877,15 +954,25 @@ def _recalculate_and_save(trade: dict, execs: list, conn, trade_id: int):
     return row_to_dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone())
 
 
-def _parse_exec_body(body: dict, fallback_date: str) -> dict:
-    return {
+def _parse_exec_body(body: dict, fallback_date: str, previous: dict | None = None) -> dict:
+    qty = float(body['qty'])
+    out = {
         'date': body.get('date', fallback_date),
         'time': body.get('time', ''),
         'action': body['action'].upper(),
-        'qty': int(body['qty']),
+        'qty': int(qty) if qty.is_integer() else round(qty, 6),
         'price': float(body['price']),
         'commission': float(body.get('commission', 0)),
     }
+    # A fill split at a reversal keeps its link to the statement line while its identity
+    # (day, time, side, size, price) is unchanged, so a re-import still recognises it.
+    if previous and previous.get('split_qty') is not None and all(
+            str(out[k]) == str(previous.get(k)) if k != 'price' and k != 'qty'
+            else abs(float(out[k]) - float(previous.get(k) or 0)) < 1e-9
+            for k in ('date', 'time', 'action', 'qty', 'price')):
+        out['split_qty'] = previous['split_qty']
+        out['split_part'] = previous.get('split_part')
+    return out
 
 
 @app.post("/api/trades/{trade_id}/executions")
@@ -908,7 +995,7 @@ def update_execution(trade_id: int, exec_idx: int, body: dict, conn: sqlite3.Con
     execs = json.loads(trade.get('executions') or '[]')
     if exec_idx < 0 or exec_idx >= len(execs):
         raise HTTPException(status_code=404, detail="Execution index out of range")
-    execs[exec_idx] = _parse_exec_body(body, trade['date'])
+    execs[exec_idx] = _parse_exec_body(body, trade['date'], execs[exec_idx] if 0 <= exec_idx < len(execs) else None)
     return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
@@ -1194,17 +1281,20 @@ def get_kpis(
     total_gross_pnl = sum(t.get('gross_pnl') or 0 for t in trades)
     total_commissions = sum(t.get('commissions') or 0 for t in trades)
 
-    winners = [t for t in trades if (t.get('net_pnl') or 0) > 0]
-    losers = [t for t in trades if (t.get('net_pnl') or 0) < 0]
-    total_trades = len(trades)
+    closed = _closed_trades(trades)
+    open_trades = len(trades) - len(closed)
+    winners = [t for t in closed if (t.get('net_pnl') or 0) > 0]
+    losers = [t for t in closed if (t.get('net_pnl') or 0) < 0]
+    total_trades = len(closed)
     win_rate = round(len(winners) / total_trades * 100, 2) if total_trades else 0
 
     avg_win = round(sum(t['net_pnl'] for t in winners) / len(winners), 2) if winners else 0
     avg_loss = round(sum(t['net_pnl'] for t in losers) / len(losers), 2) if losers else 0
 
-    gross_wins = sum(t.get('gross_pnl') or 0 for t in winners)
-    gross_losses = abs(sum(t.get('gross_pnl') or 0 for t in losers))
-    profit_factor = round(gross_wins / gross_losses, 2) if gross_losses else None
+    # Net on both sides: the same trades decide winner/loser and the sums (commissions in).
+    net_wins = sum(t.get('net_pnl') or 0 for t in winners)
+    net_losses = abs(sum(t.get('net_pnl') or 0 for t in losers))
+    profit_factor = round(net_wins / net_losses, 2) if net_losses else None
 
     # Expectancy = win_rate * avg_win + loss_rate * avg_loss (avg_loss is negative)
     if total_trades > 0:
@@ -1307,6 +1397,7 @@ def get_kpis(
         "avg_win": avg_win,
         "avg_loss": avg_loss,
         "profit_factor": profit_factor,
+        "open_trades": open_trades,
         "trading_days": trading_days,
         "positive_days": positive_days,
         "day_win_rate": day_win_rate,
@@ -1344,9 +1435,18 @@ async def upload_diary(
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
-    # Save image file
-    safe_name = f"{date}_{account_id}_{file.filename.replace(' ', '_')}"
+    # The date must be a plain YYYY-MM-DD and the name is made here, never taken from the
+    # client as a path: nothing can land outside the uploads folder, and a second
+    # "image.png" never overwrites the first one an older entry points at.
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("date must be YYYY-MM-DD")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(file.filename).stem)[:60].strip("._") or "upload"
+    safe_name = f"{date}_{account_id}_{stem}_{uuid.uuid4().hex[:8]}{ext}"
     save_path = Path(UPLOAD_DIR) / safe_name
+    if Path(UPLOAD_DIR).resolve() not in save_path.resolve().parents:
+        raise ValueError("Invalid file name")
 
     raw = await file.read()
 
@@ -1692,13 +1792,13 @@ def get_yearly_kpis(
     account_id: list[int] | None = Depends(account_ids),
     conn: sqlite3.Connection = Depends(get_connection),
 ):
-    sql = "SELECT date, net_pnl, gross_pnl FROM trades WHERE strftime('%Y', date) = ?"
+    sql = "SELECT date, net_pnl, gross_pnl, side, executions FROM trades WHERE strftime('%Y', date) = ?"
     params = [str(year)]
     if account_id:
         sql += f" AND account_id IN ({in_marks(account_id)})"
         params += account_id
 
-    rows = conn.execute(sql + " ORDER BY date", params).fetchall()
+    rows = _closed_trades([dict(r) for r in conn.execute(sql + " ORDER BY date", params).fetchall()])
 
     # Bucket trades by month
     from collections import defaultdict
@@ -1721,9 +1821,9 @@ def get_yearly_kpis(
         net_pnl       = sum(t["net_pnl"] for t in trades)
         avg_win        = sum(t["net_pnl"] for t in winners) / len(winners) if winners else 0
         avg_loss       = sum(t["net_pnl"] for t in losers)  / len(losers)  if losers  else 0
-        gross_wins     = sum(t["gross_pnl"] for t in winners)
-        gross_losses   = abs(sum(t["gross_pnl"] for t in losers))
-        profit_factor  = gross_wins / gross_losses if gross_losses else None
+        net_wins       = sum(t["net_pnl"] for t in winners)
+        net_losses     = abs(sum(t["net_pnl"] for t in losers))
+        profit_factor  = net_wins / net_losses if net_losses else None
         win_rate       = len(winners) / total * 100 if total else 0
         trading_days   = len(set(t["date"] for t in trades))
         positive_days  = len({t["date"] for t in trades if t["net_pnl"] > 0})

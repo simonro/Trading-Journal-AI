@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { pointValue, loadPointValues } from '../pointValue';
 import { X } from 'lucide-react';
 import { tradesApi } from '../api';
 import useModalFocus from './useModalFocus';
@@ -24,6 +25,8 @@ export default function AddTradeModal({ accounts, defaultAccountId, onClose, onS
   const [error, setError] = useState(null);
 
   const update = (field, value) => setForm(p => ({ ...p, [field]: value }));
+  const [, setPointValuesReady] = useState(false);
+  useEffect(() => { let alive = true; loadPointValues().then(() => { if (alive) setPointValuesReady(true); }); return () => { alive = false; }; }, []);
   const dialogRef = useModalFocus(onClose);
 
   const previewPnl = () => {
@@ -32,7 +35,8 @@ export default function AddTradeModal({ accounts, defaultAccountId, onClose, onS
     const qty = parseInt(form.quantity);
     const comm = parseFloat(form.commissions) || 0;
     if (!entry || !exit || !qty) return null;
-    const gross = form.side === 'LONG' ? (exit - entry) * qty : (entry - exit) * qty;
+    const mult = pointValue(form.instrument_type, form.ticker);
+    const gross = (form.side === 'LONG' ? (exit - entry) : (entry - exit)) * qty * mult;
     return (gross - comm).toFixed(2);
   };
 

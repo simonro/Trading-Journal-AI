@@ -388,6 +388,14 @@ plain re-import leaves old rows as they were. Open the day, delete the affected 
 on each trade row (Delete trade; notes and tags on them go too), then import that day's statement again.
 v1.5.2 needs this for Thinkorswim days with option spreads, which earlier versions overstated.
 
+**v1.7.1 fixes how some trades were grouped.** A single fill that flipped your position (long 100,
+then one sell of 200) used to turn the whole sequence into one open trade with no P&L, and so did
+fractional shares that added up to a closed position. New imports are right. Trades already stored
+stay as they were, because a re-import skips fills it already has: to correct a day, delete its
+trades with the gear on each trade row and import that day's statement again. Profit factor now
+uses net P&L on both sides (fees included), and open positions no longer count in win rate or
+expectancy, so both numbers can change slightly.
+
 **v1.6.0 updates the database on first start.** Notes and tags are now kept per account, so two
 accounts with a trade of the same name each keep their own. Existing notes stay on the trades they
 belong to; nothing needs to be re-imported. Back up `trading_journal.db` before the first start, as

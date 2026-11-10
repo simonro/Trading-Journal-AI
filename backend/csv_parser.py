@@ -521,7 +521,8 @@ def aggregate_executions(fills: list[dict]) -> dict:
     # Detect open positions: shares bought != shares sold means no realized P&L yet
     qty_bot = sum(f['qty'] for f in fills if f['action'] == 'BOT')
     qty_sold = sum(f['qty'] for f in fills if f['action'] != 'BOT')
-    is_open = qty_bot != qty_sold
+    # Same tolerance as grouping: 0.1 + 0.2 shares bought and 0.3 sold is a closed trade.
+    is_open = not _is_flat(qty_bot - qty_sold)
 
     if is_open:
         # Open trade: no realized gain/loss, commissions are the only real cost
@@ -543,6 +544,9 @@ def aggregate_executions(fills: list[dict]) -> dict:
             'price': f.get('price', 0.0),
             'commission': f.get('commission', 0.0),
         })
+        if f.get('split_qty') is not None:
+            execs[-1]['split_qty'] = f['split_qty']
+            execs[-1]['split_part'] = f['split_part']
 
     return {
         'side': side,
@@ -711,10 +715,40 @@ def parse_futures_section_rows(rows: list[list[str]], import_tz: str = IMPORT_LO
     return executions
 
 
+def _fmt_strike(strike) -> str:
+    try:
+        return f"{float(strike):g}"
+    except (TypeError, ValueError):
+        return ''
+
+
+def _contract_id(instr, expiry, strike, opt_type, strike2=None) -> str:
+    """Instrument identity for fingerprints: two option contracts (or two verticals) on one
+    ticker with the same time, size and price are different fills."""
+    if (instr or 'STOCK') != 'OPTION':
+        return instr or 'STOCK'
+    second = f"/{_fmt_strike(strike2)}" if strike2 not in (None, '') else ''
+    return f"OPTION:{expiry or ''}:{_fmt_strike(strike)}{second}:{(opt_type or '').upper()}"
+
+
+def _vertical_second_strike(trade_group: str):
+    """A stored vertical keeps its second strike only in its name ('..._635-630_PUT_1')."""
+    if not _is_vertical_group(trade_group or ''):
+        return None
+    strikes = trade_group.split('_')[-3]
+    lead = '-' if strikes.startswith('-') else ''
+    first, _, rest = strikes.lstrip('-').partition('-')
+    return rest or None
+
+
 def execution_fingerprint(exec_dict: dict) -> str:
     """Create a unique key for duplicate detection. Uses iso_date so it matches stored executions."""
     date = exec_dict.get('iso_date') or exec_dict.get('date', '')
-    return f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}"
+    contract = _contract_id(exec_dict.get('instrument_type'), exec_dict.get('option_expiry'),
+                            exec_dict.get('option_strike'), exec_dict.get('option_type'),
+                            exec_dict.get('option_strike2'))
+    return (f"{date}|{exec_dict.get('time','')}|{exec_dict.get('ticker','')}|{contract}"
+            f"|{exec_dict.get('action','')}|{exec_dict.get('qty','')}|{exec_dict.get('price','')}")
 
 
 def get_existing_fingerprints(conn, account_id: int) -> Counter:
@@ -724,15 +758,25 @@ def get_existing_fingerprints(conn, account_id: int) -> Counter:
     copy must not hide the second copy of a new file.
     """
     cursor = conn.execute(
-        "SELECT ticker, executions FROM trades WHERE account_id = ?", (account_id,)
+        """SELECT ticker, executions, instrument_type, option_expiry, option_strike, option_type,
+                  trade_group
+           FROM trades WHERE account_id = ?""", (account_id,)
     )
     fingerprints = Counter()
     for row in cursor:
         ticker = row[0] or ''
+        contract = _contract_id(row[2], row[3], row[4], row[5], _vertical_second_strike(row[6]))
         try:
             execs = json.loads(row[1] or '[]')
             for e in execs:
-                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{e.get('action','')}|{e.get('qty','')}|{e.get('price','')}"
+                qty = e.get('qty', '')
+                if e.get('split_qty') is not None:
+                    # A fill split at a reversal is one fill in the statement: count it once,
+                    # at its original size.
+                    if e.get('split_part') != 1:
+                        continue
+                    qty = e['split_qty']
+                fp = f"{e.get('date','')}|{e.get('time','')}|{ticker}|{contract}|{e.get('action','')}|{qty}|{e.get('price','')}"
                 fingerprints[fp] += 1
         except Exception:
             pass
@@ -788,7 +832,7 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
         seq = 0
         current_fills: list[dict] = []
 
-        for fill in fills:
+        for fill in _split_at_reversals(fills):
             if _is_flat(position):
                 seq += 1
                 current_fills = []
@@ -824,6 +868,72 @@ def group_executions_by_position(executions: list[dict]) -> tuple[dict, dict]:
             group_meta[key] = _make_group_meta(last_date, ticker, instr, current_fills)
 
     return groups, group_meta
+
+
+def _split_at_reversals(fills: list[dict]) -> list[dict]:
+    """One fill that flips the position (long 100, sell 200) closes one trade and opens the
+    next. Split it at zero so each trade gets its own share of the size, amount and fee. The
+    parts remember the original size (split_qty) so a re-import still sees one known fill."""
+    out = []
+    position = 0
+    for fill in _rejoin_split_parts(fills):
+        qty = fill['qty']
+        signed = qty if fill['action'] == 'BOT' else -qty
+        new = position + signed
+        if (not _is_flat(position) and not _is_flat(new) and (position > 0) != (new > 0)
+                and fill.get('split_qty') is None):
+            close_qty = abs(position)
+            for part_no, part_qty in ((1, close_qty), (2, qty - close_qty)):
+                share = part_qty / qty
+                part = dict(fill)
+                part['qty'] = int(part_qty) if float(part_qty).is_integer() else round(part_qty, 6)
+                part['amount'] = round(fill.get('amount', 0.0) * share, 2)
+                part['commission'] = round(fill.get('commission', 0.0) * share, 4)
+                part['split_qty'] = qty
+                part['split_part'] = part_no
+                out.append(part)
+        else:
+            out.append(fill)
+        position = new
+    return out
+
+
+def _rejoin_split_parts(fills: list[dict]) -> list[dict]:
+    """Put a stored reversal split back together when both halves are here, so the split is
+    worked out again against every fill (an earlier fill imported later moves the zero point).
+    A half whose partner is not part of this regroup stays as it is."""
+    def ident(f):
+        return (f.get('iso_date') or f.get('date'), f.get('time'), f.get('action'), f.get('price'), f.get('split_qty'))
+
+    # First halves and second halves of the same statement line, in the order they occur:
+    # the n-th first half pairs with the n-th second half, so two identical reversals in the
+    # same second each keep their own pair.
+    firsts: dict[tuple, list] = {}
+    seconds: dict[tuple, list] = {}
+    for i, f in enumerate(fills):
+        if f.get('split_qty') is not None:
+            (firsts if f.get('split_part') == 1 else seconds).setdefault(ident(f), []).append(i)
+    partner: dict[int, int] = {}
+    for key, ones in firsts.items():
+        for a, b in zip(ones, seconds.get(key, [])):
+            partner[a] = b
+    folded = set(partner.values())
+    out = []
+    for i, f in enumerate(fills):
+        if i in folded:
+            continue  # merged into its first half
+        if i not in partner:
+            out.append(f)
+            continue
+        pair = (f, fills[partner[i]])
+        whole = {k: v for k, v in f.items() if k not in ('split_qty', 'split_part', '_old_group')}
+        whole['qty'] = f['split_qty']
+        whole['amount'] = round(sum(h.get('amount', 0.0) for h in pair), 2)
+        whole['commission'] = round(sum(h.get('commission', 0.0) for h in pair), 4)
+        # both stored trades the halves came from are replaced by this regroup
+        whole['_old_groups'] = sorted({h.get('_old_group') for h in pair if h.get('_old_group')})
+        out.append(whole)
+    return out
 
 
 def _is_flat(position) -> bool:
@@ -864,7 +974,7 @@ def load_open_positions_from_db(conn, account_id: int) -> list[dict]:
         execs = json.loads(d['executions'] or '[]')
         qty_bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
         qty_sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
-        if qty_bot != qty_sold:
+        if not _is_flat(qty_bot - qty_sold):
             d['parsed_execs'] = execs
             open_trades.append(d)
     return open_trades
@@ -893,6 +1003,8 @@ def _rebuild_fill_from_db_exec(e: dict, trade_meta: dict) -> dict:
         'time': e.get('time', ''),
         'amount': round(amount, 2),
         'commission': e.get('commission', 0.0),
+        **({'split_qty': e['split_qty'], 'split_part': e.get('split_part')}
+           if e.get('split_qty') is not None else {}),
     }
 
 
@@ -965,7 +1077,7 @@ def overlapping_db_fills(conn, account_id: int, new_execs: list[dict]) -> tuple[
             execs = json.loads(meta['executions'] or '[]')
             bot = sum(e.get('qty', 0) for e in execs if e.get('action') == 'BOT')
             sold = sum(e.get('qty', 0) for e in execs if e.get('action') == 'SOLD')
-            if not ({e.get('date', '') for e in execs} & dates) and bot == sold:
+            if not ({e.get('date', '') for e in execs} & dates) and _is_flat(bot - sold):
                 continue
             # The point value the trade was booked with (a generic-template multiplier
             # column, or a statement priced in other units) beats the table's.
@@ -1001,7 +1113,12 @@ def _is_vertical_group(trade_group: str) -> bool:
 
 def _cross_section_key(ex: dict) -> str:
     """Fingerprint for deduplicating across CSV sections (no time field — formats differ)."""
-    return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
+    return f"{ex.get('iso_date','')}|{ex.get('ticker','')}|{_exec_contract(ex)}|{ex.get('action','')}|{ex.get('qty','')}|{ex.get('price','')}"
+
+
+def _exec_contract(ex: dict) -> str:
+    return _contract_id(ex.get('instrument_type'), ex.get('option_expiry'), ex.get('option_strike'),
+                        ex.get('option_type'), ex.get('option_strike2'))
 
 
 def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: str = IMPORT_LOCAL_TZ) -> tuple[list[dict], int]:
@@ -1032,7 +1149,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: s
         cb_exact_keys = {_cross_section_key(ex) for ex in all_executions}
         cb_qty_map: dict[tuple, int] = {}
         for ex in all_executions:
-            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), _exec_contract(ex), ex.get('action', ''), ex.get('price', 0.0))
             cb_qty_map[k] = cb_qty_map.get(k, 0) + ex.get('qty', 0)
         for ex in parse_trade_history_section(trade_history_rows, import_tz=import_tz):
             if ex.pop('_multileg', False):
@@ -1049,7 +1166,7 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: s
                 continue
             if _cross_section_key(ex) in cb_exact_keys:
                 continue
-            k = (ex.get('iso_date', ''), ex.get('ticker', ''), ex.get('action', ''), ex.get('price', 0.0))
+            k = (ex.get('iso_date', ''), ex.get('ticker', ''), _exec_contract(ex), ex.get('action', ''), ex.get('price', 0.0))
             if cb_qty_map.get(k, 0) >= ex.get('qty', 0):
                 continue  # CB partial fills already cover this aggregated TH fill
             all_executions.append(ex)
@@ -1107,8 +1224,14 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
                 continue
             k = _option_pos_key(ex['ticker'], ex['instrument_type'],
                                 ex.get('option_expiry'), ex.get('option_strike'), ex.get('option_type'))
-            if k in open_by_key:
-                absorbed.append((ex, open_by_key[k]))
+            # A single-leg contract goes through the regroup below with its stored open
+            # trade, so a later file that closes it and opens a new one makes two trades.
+            # Verticals keep no second strike to rebuild from, so they are merged in place.
+            pos = open_by_key.get(k)
+            if (pos and _is_vertical_group(pos['trade_group'])
+                    and _fmt_strike(ex.get('option_strike2')) == _fmt_strike(_vertical_second_strike(pos['trade_group']))
+                    and ex.get('option_strike2') not in (None, '')):
+                absorbed.append((ex, pos))
             else:
                 remaining.append(ex)
 
@@ -1129,7 +1252,7 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
             # Use closing fill date for closed positions
             qty_b = sum(f['qty'] for f in all_fills if f['action'] == 'BOT')
             qty_s = sum(f['qty'] for f in all_fills if f['action'] == 'SOLD')
-            if qty_b == qty_s and all_fills:
+            if _is_flat(qty_b - qty_s) and all_fills:
                 side = pos['side']
                 exit_action = 'SOLD' if side == 'LONG' else 'BOT'
                 exit_fills = sorted([f for f in all_fills if f['action'] == exit_action],
@@ -1173,7 +1296,8 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
             'option_strike': meta['option_strike'],
             'option_type': meta['option_type'],
             'source': 'imported',
-            'replaces': sorted({f['_old_group'] for f in fills if f.get('_old_group')}),
+            'replaces': sorted({f['_old_group'] for f in fills if f.get('_old_group')}
+                               | {g for f in fills for g in f.get('_old_groups', [])}),
         })
 
     return trades, skipped
