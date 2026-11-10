@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { leaksApi, tradesApi } from '../api';
 import { money, n0, shortDate } from '../v3/parts';
 import '../leaks.css';
+import { sideInfo, sideLabel } from '../sideLabel';
 
 /* Leak Finder: the Reports "Leaks" tab. The rules live in backend/leaks.py; this file only
    names the buckets in plain words and lays them out. A leak only uses what was known when
@@ -113,7 +114,7 @@ function TradeList({ ids, trades, onOpen }) {
                     aria-label={`Open ${t.ticker} trade on ${t.date}`}>
                   <td className="v3-mono">{shortDate(t.date)} <span className="v3-read">{(firstTime(t) || '').slice(0, 5)}</span></td>
                   <td><span className="v3-tick">{t.ticker}</span></td>
-                  <td className="v3-hide-s v3-side">{t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side}</td>
+                  <td className="v3-hide-s v3-side" title={sideInfo(t).title}>{sideLabel(t)}</td>
                   <td className={`r v3-mono ${Number(t.net_pnl) < 0 ? 'v3-neg' : Number(t.net_pnl) > 0 ? 'v3-pos' : 'v3-flat'}`}>{money(t.net_pnl)}</td>
                 </tr>
               );

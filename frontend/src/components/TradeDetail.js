@@ -6,6 +6,7 @@ import TradingChart from './TradingChart';
 import TradeExits from './exitlab/TradeExits';
 import { DemoLabel } from './exitlab/shared';
 import { PageHeader, KpiStrip, KpiCell, MoneyValue, PanelHead } from './ui';
+import { sideInfo, sideLabel } from '../sideLabel';
 
 const fmt$ = (v) => {
   if (v == null) return '—';
@@ -550,7 +551,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
         subtitle={<>
           <span className="num">{trade.date}</span>
           {' / '}{trade.instrument_type ? trade.instrument_type.charAt(0) + trade.instrument_type.slice(1).toLowerCase() : 'Stock'}
-          {' / '}{trade.side === 'LONG' ? 'Long' : trade.side === 'SHORT' ? 'Short' : trade.side}
+          {' / '}<span title={sideInfo(trade).title}>{sideLabel(trade)}</span>
           {stats.openTime && <> · Opened <span className="num">{stats.openTime.slice(0, 5)}</span></>}
           {stats.closeTime && stats.isClosed && <> · Closed <span className="num">{stats.closeTime.slice(0, 5)}</span></>}
           {stats.holdMinutes != null && <> · Held <span className="num">{stats.fmtHold(stats.holdMinutes)}</span></>}
@@ -581,7 +582,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
       >
         {tab !== 'Exits' && <DemoLabel show={trade.source === 'demo'} />}
         <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-          <span className="chip">{trade.side}</span>
+          <span className="chip" title={sideInfo(trade).title}>{sideLabel(trade).toUpperCase()}</span>
           <span className="chip">{stats.isClosed ? 'Closed' : 'Open'}</span>
           {stats.isClosed && (
             <span className={`chip ${stats.isWin ? 'pos' : 'neg'}`}>{stats.isWin ? 'Win' : 'Loss'}</span>
@@ -689,7 +690,7 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                   )}
                 </div>
 
-                <StatRow label="Side" value={trade.side} />
+                <StatRow label="Side" value={sideInfo(trade).mechanics ? `${sideLabel(trade)}, ${sideInfo(trade).mechanics.toLowerCase()}` : sideLabel(trade)} />
                 <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
                 <StatRow label="Net ROI" value={stats.netRoi != null ? `${stats.netRoi >= 0 ? '+' : ''}${stats.netRoi.toFixed(2)}%` : '—'} valueColor={stats.netRoi != null ? (stats.netRoi >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
