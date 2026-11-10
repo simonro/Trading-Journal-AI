@@ -7,6 +7,7 @@ import {
   Measures, BarRow, Tabs, Seg, EquityCurve, SessionStrip, MonthGrid,
   money, money2, moneyK, tone, shortDate, MONTH_NAMES,
 } from './parts';
+import { sideInfo, sideLabel } from '../sideLabel';
 
 /* ── the month, fetched per month like the old mini calendar ───────────── */
 function MonthPanel({ accountId, onDayClick, latestDate }) {
@@ -213,7 +214,7 @@ function OpenPositions(p) {
                     aria-label={`Open ${pos.ticker} position`}
                   >
                     <td className="v3-tick">{pos.ticker}</td>
-                    <td className="v3-hide-s v3-side">{side === 'LONG' ? 'Long' : 'Short'}</td>
+                    <td className="v3-hide-s v3-side" title={sideInfo({ ...pos, side }).title}>{sideLabel({ ...pos, side })}</td>
                     <td className="r v3-mono">
                       {remainingQty}
                       {exitQty > 0 && <span className="v3-read"> of {totalQty}</span>}
@@ -481,7 +482,7 @@ export default function DashboardRender(p) {
                           aria-label={`Open ${t.ticker} trade`}
                         >
                           <td className="v3-tick">{t.ticker}</td>
-                          <td className="v3-hide-s v3-side">{(t.side || '').toLowerCase() === 'short' ? 'Short' : 'Long'}</td>
+                          <td className="v3-hide-s v3-side" title={sideInfo(t).title}>{sideLabel(t)}</td>
                           <td className="r v3-mono v3-read">{t.date}</td>
                           <td className={`r v3-mono ${tone(t.net_pnl)}`} style={{ fontWeight: 600 }}>{money2(t.net_pnl)}</td>
                         </tr>

@@ -1,6 +1,7 @@
 /* Review page pieces in the V3 language. Presentation only. */
 import { useState, useMemo } from 'react';
 import { Measures, Tabs, Grade, money, money2, tone } from './parts';
+import { sideInfo, sideLabel } from '../sideLabel';
 
 /* the clock every trading session runs on */
 const OPEN = 9.5;
@@ -411,8 +412,8 @@ export function DayTrades({ trades, gradeMap, loading, onOpen }) {
                   <div className="v3-tick">{t.ticker}</div>
                   <div className="v3-read">{t.instrument_type}</div>
                 </td>
-                <td className="v3-hide-s v3-side">
-                  {t.side === 'LONG' ? 'Long' : t.side === 'SHORT' ? 'Short' : t.side}
+                <td className="v3-hide-s v3-side" title={sideInfo(t).title}>
+                  {sideLabel(t)}
                 </td>
                 <td className="v3-hide-s v3-read">{t.strategy || 'not set'}</td>
                 <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>

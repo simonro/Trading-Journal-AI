@@ -367,3 +367,14 @@ def test_setup_slice_uses_the_playbook_setup_name(client):
     assert labels == {'Midday Fade', 'Opening Drive', 'No setup'}
     ids = {f['id'] for f in leaks.bucket_table(rows)}
     assert 'setup:Midday Fade' in ids and 'setup:Opening Drive' in ids
+
+
+def test_direction_uses_option_bias_not_opening_side():
+    base = {'instrument_type': 'OPTION'}
+    assert leaks.trade_direction({**base, 'side': 'SHORT', 'option_type': 'PUT'}) == 'LONG'    # sold put / put credit spread
+    assert leaks.trade_direction({**base, 'side': 'LONG', 'option_type': 'PUT'}) == 'SHORT'    # bought put
+    assert leaks.trade_direction({**base, 'side': 'SHORT', 'option_type': 'CALL'}) == 'SHORT'  # sold call
+    assert leaks.trade_direction({**base, 'side': 'LONG', 'option_type': 'CALL'}) == 'LONG'    # bought call
+    assert leaks.trade_direction({'instrument_type': 'STOCK', 'side': 'SHORT'}) == 'SHORT'
+    assert leaks.trade_direction({'instrument_type': 'FUTURE', 'side': 'LONG'}) == 'LONG'
+    assert leaks.trade_direction({'instrument_type': 'OPTION', 'side': 'SHORT'}) == 'SHORT'    # no option_type: keep side
