@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { tradesApi, kpisApi, diaryApi, dailySummaryApi } from '../api';
 import { PageHeader, PanelHead } from './ui';
+import EdgeDayNote, { isEdgeDayNote } from './EdgeDayNote';
 import { DayCurve, DayMeasures, Coaching, DayTrades } from '../v3/ReviewParts';
 import {
   BarChart, Bar, XAxis, YAxis, ReferenceLine,
@@ -65,6 +66,8 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
   const [trades, setTrades] = useState([]);
   const [kpis, setKpis] = useState(null);
   const [, setDiary] = useState(null);
+  // Day notes written in Edge Trader and synced into the diary.
+  const [dayNotes, setDayNotes] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -116,6 +119,7 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       const diaryEntries = diaryRes.data || [];
       const dayDiary = diaryEntries.find(e => e.entry_date === d) || null;
       setDiary(dayDiary);
+      setDayNotes(diaryEntries.filter(e => e.entry_date === d && isEdgeDayNote(e)));
     } catch (e) {
       console.error('Failed to load day data', e);
     } finally {
@@ -244,6 +248,16 @@ export default function DailySummary({ accountId, date, onDateChange, onOpenDeta
       {/* ── Main 2-column grid ── */}
       <div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Your own day note from Edge Trader, when you wrote one */}
+          {!loading && dayNotes.map(note => (
+            <EdgeDayNote
+              key={note.id}
+              as="section"
+              entry={note}
+              accountLabel={dayNotes.length > 1 ? `Account ${note.account_id}` : null}
+            />
+          ))}
+
           {/* Coaching first: you read the review, then the trades it is about */}
           <section className="card">
             <Coaching summary={summary} loading={summaryLoading} onRegenerate={handleRegenerate} />

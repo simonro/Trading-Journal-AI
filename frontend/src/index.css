@@ -48,6 +48,12 @@
   --cal-pos: #203630;
   --cal-neg: #392730;
 
+  /* ---- Order levels on the trade chart and Timeline (Edge Trader sync) ----
+     Stop is the caution colour; target needs its own hue because the V3 theme
+     makes --accent-line amber too. Neither is red or green. */
+  --level-stop: var(--caution);
+  --level-target: #8FA9FF;
+
   /* ---- Type ---- */
   --font-body: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -1032,6 +1038,210 @@ button.month-card:active { transform: translateY(1px); }
   color: var(--text-primary);
 }
 .brain-suggestion:hover { border-color: var(--divider); }
+
+/* ============================================================
+   Edge Trader Sync: trade timeline, chart overlays, day note
+   Stop marks use --level-stop and target marks --level-target,
+   the same pair as the chart's history lines. Never red/green:
+   those mean result.
+   ============================================================ */
+
+/* Trade timeline: time | rail mark | what happened | where it came from */
+.tl-list { list-style: none; }
+.tl-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 66px 14px minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+  align-items: start;
+  padding: 5px 0;
+}
+.tl-row::before {
+  content: '';
+  position: absolute;
+  left: calc(66px + var(--space-2) + 6px);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--divider-strong);
+}
+.tl-row:first-child::before { top: 15px; }
+.tl-row:last-child::before { bottom: auto; height: 15px; }
+.tl-row:only-child::before { display: none; }
+.tl-time { font-size: var(--fs-small); line-height: 20px; color: var(--text-secondary); white-space: nowrap; }
+.tl-mark {
+  position: relative;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  margin: 6px auto 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  box-shadow: 0 0 0 3px var(--surface-panel);
+}
+.tl-stop .tl-mark { border-radius: 1px; background: var(--level-stop); transform: rotate(45deg); width: 8px; height: 8px; }
+.tl-target .tl-mark { background: var(--surface-panel); border: 2px solid var(--level-target); }
+.tl-note .tl-mark { background: var(--text-primary); }
+.tl-fill .tl-mark { background: var(--text-secondary); }
+.tl-stop.tl-cancelled .tl-mark { background: var(--surface-panel); border: 1.5px solid var(--level-stop); }
+.tl-target.tl-cancelled .tl-mark { border-style: dotted; }
+.tl-body { min-width: 0; }
+.tl-title { font-size: 14px; line-height: 20px; color: var(--text-primary); overflow-wrap: anywhere; }
+.tl-cancelled .tl-title { color: var(--text-secondary); }
+.tl-note .tl-title { font-size: var(--fs-small); color: var(--text-secondary); }
+.tl-detail { font-size: var(--fs-small); line-height: 1.45; color: var(--text-secondary); overflow-wrap: anywhere; }
+.tl-note-text {
+  margin-top: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tl-origin { font-size: var(--fs-caption); line-height: 20px; color: var(--text-tertiary); white-space: nowrap; }
+.tl-empty {
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+/* Rows linked to the chart: a hit area that bleeds past the text, rail kept in place */
+.tl-linked {
+  margin: 0 calc(-1 * var(--space-2));
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.tl-linked::before { left: calc(var(--space-2) + 66px + var(--space-2) + 6px); }
+.tl-linked:hover { background: var(--surface-hover); }
+.tl-linked:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; background: var(--surface-hover); }
+.tl-pinned, .tl-pinned:hover { background: var(--surface-selected); }
+@media (max-width: 520px) {
+  .tl-row { grid-template-columns: 62px 14px minmax(0, 1fr); }
+  .tl-row::before { left: calc(62px + var(--space-2) + 6px); }
+  .tl-linked::before { left: calc(var(--space-2) + 62px + var(--space-2) + 6px); }
+  .tl-origin { grid-column: 3; line-height: 16px; }
+}
+
+/* Trade chart: stop/target history legend swatch, note pins over the canvas */
+.swatch-dashed {
+  width: 16px;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, var(--level-target) 0 5px, transparent 5px 8px);
+}
+.chart-caption { margin: 0 0 var(--space-2); font-size: var(--fs-caption); color: var(--text-secondary); }
+/* isolate keeps the chart canvases' own z-index inside, so the pins sit on top */
+.chart-stage { position: relative; isolation: isolate; }
+.chart-notes { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.chart-note { position: absolute; top: 0; left: 0; width: 0; height: 100%; }
+.chart-note:hover, .chart-note:focus-within { z-index: 4; }
+.chart-note-guide { position: absolute; top: 30px; bottom: 30px; left: 0; border-left: 1px dashed var(--divider-strong); }
+.chart-note-pin {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--divider-strong);
+  border-radius: 11px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-size: 11px;
+  pointer-events: auto;
+}
+.chart-note-pin:hover { background: var(--surface-selected); border-color: var(--accent-line-hover); }
+.chart-note-pin:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.chart-note-tip {
+  position: absolute;
+  top: 34px;
+  width: max-content;
+  max-width: 300px;
+  padding: var(--space-2) 10px;
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-header);
+  box-shadow: var(--shadow-dropdown);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.chart-note-tip.tip-mid { left: 0; transform: translateX(-50%); }
+.chart-note-tip.tip-start { left: -11px; }
+.chart-note-tip.tip-end { right: -11px; }
+.chart-note-tip p + p { margin-top: 6px; }
+.chart-note-time { margin-right: 6px; font-size: var(--fs-caption); color: var(--text-secondary); }
+.chart-note:hover .chart-note-tip,
+.chart-note-pin:focus + .chart-note-tip { opacity: 1; }
+
+/* Timeline event pointed out on the chart: guide at its bar, time chip above the axis */
+.chart-hl { position: absolute; top: 0; left: 0; width: 0; height: 100%; z-index: 2; pointer-events: none; }
+.chart-hl-guide { position: absolute; top: 0; bottom: 28px; left: 0; border-left: 1px solid var(--text-secondary); }
+.chart-hl-stop .chart-hl-guide { border-left-color: var(--level-stop); }
+.chart-hl-target .chart-hl-guide { border-left-color: var(--level-target); }
+.chart-hl-time {
+  position: absolute;
+  bottom: 31px;
+  padding: 1px 6px;
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-header);
+  font-size: var(--fs-caption);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.chart-hl-time.hl-mid { left: 0; transform: translateX(-50%); }
+.chart-hl-time.hl-start { left: 0; }
+.chart-hl-time.hl-end { right: 0; }
+
+/* Day note written in Edge Trader (Diary and Day Review) */
+.edge-note { display: flex; align-items: flex-start; gap: var(--space-4); }
+.edge-note-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 76px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-line);
+}
+.edge-note-body { flex: 1; min-width: 0; }
+.edge-note-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-height: 28px; }
+.edge-note-label { font-family: var(--font-display); font-size: var(--fs-body); font-weight: 600; }
+.edge-note-meta { font-size: var(--fs-small); color: var(--text-secondary); }
+.edge-note-actions { margin-left: auto; }
+.edge-note-text {
+  max-width: 75ch;
+  margin-top: var(--space-2);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .edge-note { gap: var(--space-3); }
+  .edge-note-tile { width: 40px; height: 40px; }
+}
 
 /* ============================================================
    Motion preferences

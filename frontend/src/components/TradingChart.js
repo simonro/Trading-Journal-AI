@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { createChart, ColorType, CrosshairMode, LineStyle } from 'lightweight-charts';
+import { createChart, ColorType, CrosshairMode, LineStyle, LineType } from 'lightweight-charts';
+import { MessageSquareText } from 'lucide-react';
 import { chartApi } from '../api';
+import { levelSteps, etWallSec, etParts, eventGroup } from './edgeEvents';
 
 // lightweight-charts paints to canvas and cannot resolve CSS var(), so colours
 // are read from the design tokens at render time. Fallbacks are the token values.
@@ -30,16 +32,23 @@ function chartTheme() {
     crossLabel: cssVar('--chart-crosshair-label', '#4C525E'),
   };
 }
+// Edge Trader stop/target history: their own tokens, falling back to the SL/Target colours.
+function levelTheme(T) {
+  return { stop: cssVar('--level-stop', '') || T.stop, target: cssVar('--level-target', '') || T.target };
+}
 
 // lightweight-charts always renders its axis and crosshair labels using UTC getters,
 // with no timezone option. Alpaca's bars come back as true UTC ("...T14:07:00Z" for
 // 10:07 ET), so feeding them straight in shows UTC hours on the axis while execution
 // times are already stored as ET wall-clock. Fix: shift bar timestamps by the market's
-// UTC offset so the "UTC" the library reads back out is actually ET. Hardcoded to EDT
-// (UTC-4) for now, matching the rest of this file — no winter DST handling yet.
-const ET_UTC_OFFSET_SEC = 4 * 3600;
-
-const toTs = (isoUtcStr) => Math.floor(new Date(isoUtcStr).getTime() / 1000) - ET_UTC_OFFSET_SEC;
+// UTC offset so the "UTC" the library reads back out is actually ET. The offset is
+// each bar's own (EDT in summer, EST in winter), the same conversion the Edge Trader
+// events use, so fills, events and candles share one timeline all year.
+const toTs = (isoUtcStr) => {
+  const p = etParts(isoUtcStr);
+  const sec = p ? etWallSec(p.date, p.time) : null;
+  return sec ?? Math.floor(new Date(isoUtcStr).getTime() / 1000);
+};
 
 // Daily/weekly bars are stamped at session open, already whole calendar days —
 // no ET/UTC shift needed there, just a straight epoch conversion.
@@ -96,7 +105,50 @@ const SESSION_TFS = new Set(['1Min', '3Min', '5Min', '10Min', '15Min']);
 // times parse as literal UTC.
 const etWallTs = (dateStr, hhmm) => Math.floor(new Date(`${dateStr}T${hhmm}:00Z`).getTime() / 1000);
 // Legend entries that can be switched on and off. Not remembered between trades.
-const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, sl: true, target: true };
+const DEFAULT_VISIBLE = { buy: true, sell: true, vwap: true, sl: true, target: true, stopPath: true, targetPath: true, notes: true };
+const NO_EVENTS = [];
+const NO_OVERLAY = { stopPath: false, targetPath: false, notes: false, levelsSkipped: false };
+
+// Index of the last bar at or before `sec` (bar times ascending). Before the first
+// bar gives 0 and past the last bar gives the last index.
+function barIndexAt(times, sec) {
+  const last = times.length - 1;
+  if (sec === Infinity || sec >= times[last]) return last;
+  if (sec <= times[0]) return 0;
+  let lo = 0;
+  let hi = last;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (times[mid] <= sec) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+// Stop or target steps (edgeEvents.levelSteps) as stepped line data on the bars'
+// own times, so the line adds no empty slots to the time scale. A cancel leaves
+// a gap (whitespace point) until the next level is set.
+function levelSeriesData(steps, times) {
+  if (!steps.length || !times.length) return [];
+  const byIndex = new Map();
+  let gapAt = null;
+  for (const st of steps) {
+    const idx = barIndexAt(times, st.sec);
+    if (st.price == null) {
+      // Cancelled before the first loaded bar: nothing of it is on screen.
+      if (st.sec < times[0]) { byIndex.delete(0); gapAt = null; } else gapAt = idx;
+      continue;
+    }
+    if (gapAt != null) {
+      if (idx > gapAt + 1 && !byIndex.has(gapAt + 1)) byIndex.set(gapAt + 1, null);
+      gapAt = null;
+    }
+    byIndex.set(idx, st.price);
+  }
+  if (gapAt != null && gapAt + 1 < times.length && !byIndex.has(gapAt + 1)) byIndex.set(gapAt + 1, null);
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([i, v]) => (v == null ? { time: times[i] } : { time: times[i], value: v }));
+}
 
 // Show or hide the toggleable layers on an existing chart.
 function applyLayers(layers, visible) {
@@ -104,6 +156,8 @@ function applyLayers(layers, visible) {
   (layers.vwap || []).forEach(line => line.applyOptions({ visible: visible.vwap }));
   if (layers.sl) layers.sl.applyOptions({ lineVisible: visible.sl, axisLabelVisible: visible.sl, title: visible.sl ? 'SL' : '' });
   if (layers.target) layers.target.applyOptions({ lineVisible: visible.target, axisLabelVisible: visible.target, title: visible.target ? 'Target' : '' });
+  if (layers.stopPath) layers.stopPath.applyOptions({ visible: visible.stopPath });
+  if (layers.targetPath) layers.targetPath.applyOptions({ visible: visible.targetPath });
   if (layers.candles) {
     const shown = layers.markers
       .filter(m => (m.isBuy ? visible.buy : visible.sell))
@@ -115,7 +169,10 @@ function applyLayers(layers, visible) {
 export default function TradingChart({
   ticker, date, defaultTimeframe = '5Min',
   executions = [], side = 'LONG', analysis = null,
+  events = NO_EVENTS, instrumentType = null,
   height = 320,
+  // A Timeline event to point out on the chart (hovered, focused or pinned there).
+  highlight = null,
 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -129,7 +186,22 @@ export default function TradingChart({
   const visibleRef = useRef(DEFAULT_VISIBLE);
   // Handles to everything a legend toggle controls, so toggling never rebuilds
   // the chart (and never loses the current zoom).
-  const layersRef = useRef({ candles: null, vwap: [], markers: [], sl: null, target: null });
+  const layersRef = useRef({ candles: null, vwap: [], markers: [], sl: null, target: null, stopPath: null, targetPath: null });
+  // Edge Trader overlays: which ones this trade has, and the note pins placed over
+  // the chart (HTML, so each note can be hovered and focused).
+  const [overlay, setOverlay] = useState(NO_OVERLAY);
+  const [notePins, setNotePins] = useState([]);
+  // The highlighted event: a guide at its bar (HTML, follows pan and zoom) and a
+  // price line at its level. The chart effect fills the two functions in.
+  const highlightRef = useRef(highlight);
+  const [hlPos, setHlPos] = useState(null);
+  const placeHlRef = useRef(() => {});
+  const drawHlLineRef = useRef(() => {});
+  useEffect(() => {
+    highlightRef.current = highlight;
+    drawHlLineRef.current();
+    placeHlRef.current();
+  }, [highlight]);
   // Set right before a zoom-out-triggered fetch, holding the visible window so
   // it can be restored once the wider dataset lands — otherwise the chart would
   // jump back to fitContent() every time more history streams in.
@@ -185,7 +257,7 @@ export default function TradingChart({
 
     const barTs = isWide ? toDayTs : toTs;
     const T = chartTheme();
-    layersRef.current = { candles: null, vwap: [], markers: [], sl: null, target: null };
+    layersRef.current = { candles: null, vwap: [], markers: [], sl: null, target: null, stopPath: null, targetPath: null };
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -358,7 +430,142 @@ export default function TradingChart({
         .sort((a, b) => a.time - b.time);
       layersRef.current.markers = markers;
     }
+
+    // ── Edge Trader: stop and target over time, and notes ───────────────
+    // Same intraday-only rule as the fill markers. Stop and target prices are the
+    // traded instrument's, so they are drawn only where the chart shows that
+    // instrument (stocks), not an option's or future's underlying.
+    const times = candleData.map(c => c.time);
+    let notes = [];
+    const nextOverlay = { ...NO_OVERLAY };
+    if (!isWide && times.length && events.length) {
+      const stockLike = !instrumentType || instrumentType === 'STOCK';
+      if (stockLike) {
+        const entryQty = entryFills.reduce((s, f) => s + (f.qty || 0), 0);
+        const exitQty = exitFills.reduce((s, f) => s + (f.qty || 0), 0);
+        const execSecs = executions.map(f => etWallSec(f.date || date, f.time)).filter(n => n != null);
+        // A closed trade's levels end at its last fill; an open one runs to the last bar.
+        const endSec = entryQty > 0 && exitQty >= entryQty && execSecs.length ? Math.max(...execSecs) : null;
+        const addLevel = (which, color, style) => {
+          const data = levelSeriesData(levelSteps(events, which, endSec), times);
+          if (!data.some(d => d.value != null)) return null;
+          const line = chart.addLineSeries({
+            color, lineWidth: 2, lineStyle: style, lineType: LineType.WithSteps,
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          });
+          line.setData(data);
+          return line;
+        };
+        const L = levelTheme(T);
+        layersRef.current.stopPath = addLevel('stop', L.stop, LineStyle.Solid);
+        layersRef.current.targetPath = addLevel('target', L.target, LineStyle.Dashed);
+        nextOverlay.stopPath = !!layersRef.current.stopPath;
+        nextOverlay.targetPath = !!layersRef.current.targetPath;
+      } else {
+        nextOverlay.levelsSkipped = events.some(e => e.price != null && e.kind !== 'note');
+      }
+
+      // Notes inside the loaded bars, grouped per bar.
+      const bucketSec = (TF_MINUTES[timeframe] || 5) * 60;
+      const lastEnd = times[times.length - 1] + bucketSec;
+      const byBar = new Map();
+      events.forEach(e => {
+        if (e.kind !== 'note' || e._sec == null || e._sec < times[0] || e._sec >= lastEnd) return;
+        const idx = barIndexAt(times, e._sec);
+        if (!byBar.has(idx)) byBar.set(idx, []);
+        byBar.get(idx).push({ id: e.id, time: e._et ? e._et.time : '', text: (e.text || '').trim() || 'Note' });
+      });
+      notes = [...byBar.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([idx, list]) => ({ key: `bar-${times[idx]}`, time: times[idx], notes: list }));
+      nextOverlay.notes = notes.length > 0;
+    }
+    setOverlay(prev => (Object.keys(nextOverlay).every(k => prev[k] === nextOverlay[k]) ? prev : nextOverlay));
     applyLayers(layersRef.current, visibleRef.current);
+
+    // ── Timeline highlight ───────────────────────────────────────────────
+    // Price line only where the chart shows the traded instrument (stocks), the
+    // same rule as the stop and target history.
+    const hlLevels = levelTheme(T);
+    const hlStockLike = !instrumentType || instrumentType === 'STOCK';
+    const hlBucketSec = (TF_MINUTES[timeframe] || 5) * 60;
+    drawHlLineRef.current = () => {
+      const layers = layersRef.current;
+      if (layers.hlLine) { candleSeries.removePriceLine(layers.hlLine); layers.hlLine = null; }
+      const e = highlightRef.current;
+      const price = e ? Number(e.price) : NaN;
+      if (!e || isWide || !hlStockLike || e.kind === 'note' || e.price == null || !Number.isFinite(price)) return;
+      const group = eventGroup(e.kind);
+      layers.hlLine = candleSeries.createPriceLine({
+        price,
+        color: group === 'stop' ? hlLevels.stop : group === 'target' ? hlLevels.target : T.text,
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: group === 'stop' ? 'Stop' : group === 'target' ? 'Target' : '',
+      });
+    };
+    let hlAlive = true;
+    const placeHl = () => {
+      if (!hlAlive) return;
+      const e = highlightRef.current;
+      let next = null;
+      if (e && !isWide && e._sec != null && times.length
+          && e._sec >= times[0] && e._sec < times[times.length - 1] + hlBucketSec) {
+        const ts = chart.timeScale();
+        const x = ts.timeToCoordinate(times[barIndexAt(times, e._sec)]);
+        const w = ts.width();
+        if (x != null && x >= 0 && x <= w) {
+          next = {
+            x,
+            align: x < 40 ? 'start' : x > w - 40 ? 'end' : 'mid',
+            group: eventGroup(e.kind),
+            time: e._et ? e._et.time.slice(0, 5) : '',
+            key: `${e.id ?? e._i}`,
+          };
+        }
+      }
+      setHlPos(prev => {
+        if (!prev && !next) return prev;
+        if (prev && next && Object.keys(next).every(k => prev[k] === next[k])) return prev;
+        return next;
+      });
+    };
+    placeHlRef.current = placeHl;
+    drawHlLineRef.current();
+
+    // Note pins follow the time scale: re-placed on every pan, zoom and resize.
+    let alive = true;
+    let raf = 0;
+    const placeNotes = () => {
+      if (!alive) return;
+      if (!notes.length) { setNotePins(prev => (prev.length ? [] : prev)); return; }
+      const ts = chart.timeScale();
+      const w = ts.width();
+      const stageW = containerRef.current ? containerRef.current.clientWidth : w;
+      // Pins closer than a pin's width merge into one, so none hides another.
+      const pins = [];
+      notes.forEach(n => {
+        const x = ts.timeToCoordinate(n.time);
+        if (x == null || x < 0 || x > w) return;
+        const last = pins[pins.length - 1];
+        if (last && x - last.x < 24) {
+          last.notes = [...last.notes, ...n.notes];
+          last.key = `${last.key}+${n.key}`;
+        } else {
+          pins.push({ key: n.key, notes: n.notes, x });
+        }
+      });
+      // The note text opens on whichever side has room, never past the chart.
+      setNotePins(pins.map(p => {
+        const right = stageW - p.x;
+        const mid = 2 * Math.min(p.x, right);
+        const align = mid >= 300 ? 'mid' : right >= p.x ? 'start' : 'end';
+        const room = align === 'mid' ? mid : align === 'start' ? right + 7 : p.x + 11;
+        return { ...p, align, maxWidth: Math.max(160, Math.min(300, room - 8)) };
+      }));
+    };
+    const scheduleNotes = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { placeNotes(); placeHl(); }); };
 
     // Restore the pre-fetch window when this render is a background history
     // extension (below), so the view holds still instead of snapping back to
@@ -395,6 +602,8 @@ export default function TradingChart({
     const markUserMove = () => { userMoved = true; };
     const el = containerRef.current;
     ['wheel', 'mousedown', 'touchstart'].forEach(evt => el.addEventListener(evt, markUserMove, { passive: true }));
+    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleNotes);
+    scheduleNotes();
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range || !userMoved || loadingMoreRef.current || daysBack >= maxDays) return;
       const barsInfo = candleSeries.barsInLogicalRange(range);
@@ -407,16 +616,22 @@ export default function TradingChart({
 
     const ro = new ResizeObserver(() => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+      scheduleNotes();
     });
     ro.observe(containerRef.current);
 
     return () => {
+      alive = false;
+      hlAlive = false;
+      placeHlRef.current = () => {};
+      drawHlLineRef.current = () => {};
+      cancelAnimationFrame(raf);
       ro.disconnect();
       ['wheel', 'mousedown', 'touchstart'].forEach(evt => el.removeEventListener(evt, markUserMove));
       chart.remove();
       chartRef.current = null;
     };
-  }, [bars, executions, side, analysis, height, loading, date, timeframe, isWide, daysBack]);
+  }, [bars, executions, side, analysis, events, instrumentType, height, loading, date, timeframe, isWide, daysBack]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -430,6 +645,9 @@ export default function TradingChart({
     !isWide && { key: 'vwap', label: 'VWAP', swatch: { width: 16, height: 2, background: 'var(--text-secondary)' } },
     analysis?.stop_loss && { key: 'sl', label: 'SL', swatch: { width: 16, height: 2, background: 'var(--caution)' } },
     analysis?.target_price && { key: 'target', label: 'Target', swatch: { width: 16, height: 2, background: 'var(--accent-line)' } },
+    overlay.stopPath && { key: 'stopPath', label: 'Stop history', swatch: { width: 16, height: 3, background: 'var(--level-stop)' } },
+    overlay.targetPath && { key: 'targetPath', label: 'Target history', className: 'swatch-dashed' },
+    overlay.notes && { key: 'notes', label: 'Notes', icon: true },
   ].filter(Boolean);
 
   return (
@@ -480,12 +698,54 @@ export default function TradingChart({
                 title={`${visible[item.key] ? 'Hide' : 'Show'} ${item.label}`}
                 onClick={() => toggle(item.key)}
               >
-                <span aria-hidden="true" style={{ display: 'inline-block', ...item.swatch }} />
+                {item.icon
+                  ? <MessageSquareText size={13} aria-hidden="true" />
+                  : <span aria-hidden="true" className={item.className} style={{ display: 'inline-block', ...item.swatch }} />}
                 {item.label}
               </button>
             ))}
           </div>
-          <div ref={containerRef} style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }} />
+          {overlay.levelsSkipped && (
+            <div className="chart-caption">
+              Stop and target history is not drawn on this chart: it shows the underlying, and those prices are the contract's. The Timeline lists them.
+            </div>
+          )}
+          <div className="chart-stage">
+            <div ref={containerRef} style={{ width: '100%', background: 'var(--surface-panel)', borderRadius: 'var(--radius-md)' }} />
+            {hlPos && (
+              <div className={`chart-hl chart-hl-${hlPos.group}`} style={{ transform: `translateX(${hlPos.x}px)` }} aria-hidden="true">
+                <span className="chart-hl-guide" />
+                <span className={`chart-hl-time mono num hl-${hlPos.align}`}>{hlPos.time}</span>
+              </div>
+            )}
+            {visible.notes && notePins.length > 0 && (
+              <div className="chart-notes">
+                {notePins.map(p => {
+                  const tipId = `chart-note-${p.key}`;
+                  const first = p.notes[0];
+                  return (
+                    <div key={p.key} className="chart-note" style={{ transform: `translateX(${p.x}px)` }}>
+                      <span className="chart-note-guide" aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="chart-note-pin"
+                        aria-describedby={tipId}
+                        aria-label={p.notes.length > 1 ? `${p.notes.length} notes from ${first.time}` : `Note at ${first.time}`}
+                      >
+                        <MessageSquareText size={12} aria-hidden="true" />
+                        {p.notes.length > 1 && <span className="num">{p.notes.length}</span>}
+                      </button>
+                      <div role="tooltip" id={tipId} className={`chart-note-tip tip-${p.align}`} style={{ maxWidth: p.maxWidth }}>
+                        {p.notes.map((n, i) => (
+                          <p key={n.id ?? i}><span className="mono chart-note-time">{n.time}</span>{n.text}</p>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>
