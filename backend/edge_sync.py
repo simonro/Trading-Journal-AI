@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -36,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -73,6 +74,8 @@ def init_sync_tables(conn: sqlite3.Connection) -> None:
             agg_key TEXT NOT NULL,        -- same without time and qty (merged statement fills)
             status TEXT NOT NULL,         -- new | already | covered
             payload_hash TEXT NOT NULL,
+            qty REAL,                     -- the fill's size
+            lead_key TEXT,                -- first fill key of its execution (a vertical has two)
             first_synced TEXT NOT NULL DEFAULT (datetime('now')),
             last_synced TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -132,6 +135,10 @@ def init_sync_tables(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_annot_trade ON sync_annotations(account_id, trade_group);
     """)
+    fill_cols = {r[1] for r in conn.execute("PRAGMA table_info(sync_fills)")}
+    for col, kind in (("qty", "REAL"), ("lead_key", "TEXT")):
+        if col not in fill_cols:
+            conn.execute(f"ALTER TABLE sync_fills ADD COLUMN {col} {kind}")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(diary_entries)")}
     if "source" not in cols:
         conn.execute("ALTER TABLE diary_entries ADD COLUMN source TEXT")
@@ -258,11 +265,16 @@ def _stored_keys(args, e: dict) -> tuple[str, str, int | None]:
 class StoredFills:
     """Executions stored in the given accounts, indexed by exact and merged keys.
     Each stored execution is one item [account, group, qty_left]; consuming it by an exact
-    match also removes it from the merged-fill pool."""
+    match also removes it from the merged-fill pool.
 
-    def __init__(self, conn, account_ids):
+    Only an execution no sync has accounted for can cover Schwab fills as a merged statement fill:
+    one a sync stored or matched (`synced`: (account, exact key) -> count) is exactly one Schwab
+    fill and never covers another fill at the same price that day."""
+
+    def __init__(self, conn, account_ids, synced: Counter | None = None):
         self.exact: dict[str, list[list]] = defaultdict(list)
         self.agg: dict[str, list[list]] = defaultdict(list)
+        synced = Counter(synced or {})
         ids = sorted(set(account_ids))
         if not ids:
             return
@@ -282,6 +294,9 @@ class StoredFills:
                 qty = e["split_qty"] if part else e.get("qty", 0)
                 item = [r["account_id"], r["trade_group"], float(qty or 0)]
                 self.exact[exact].append(item)
+                if synced[(r["account_id"], exact)] > 0:
+                    synced[(r["account_id"], exact)] -= 1
+                    continue
                 self.agg[agg].append(item)
 
     def take_exact(self, key):
@@ -294,6 +309,16 @@ class StoredFills:
 
     def leftover(self, agg_key) -> list:
         return [i for i in self.agg.get(agg_key, []) if i[2] > 0]
+
+    def consume(self, agg_key, account, qty) -> None:
+        """Take what an earlier sync's covered fill used from the merged pool (its own account first)."""
+        items = sorted(self.leftover(agg_key), key=lambda i: i[0] != account)
+        for i in items:
+            use = min(i[2], qty)
+            i[2] -= use
+            qty -= use
+            if qty <= 1e-9:
+                break
 
 
 def _canonical(conn, kind: str, tag_type: str, name):
@@ -325,6 +350,18 @@ def _utc(ts: str) -> str | None:
     if dt.tzinfo is None:
         return None
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _finite(v) -> bool:
+    """None, or a number (or numeric text) that is neither NaN nor infinite."""
+    if v is None:
+        return True
+    if isinstance(v, bool):
+        return False
+    try:
+        return math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
 
 
 def _empty(v) -> bool:
@@ -376,6 +413,30 @@ def _validate(conn, req: SyncRequest) -> None:
     for e in req.events:
         if e.kind not in EVENT_KINDS:
             raise HTTPException(422, f"Unknown event kind '{e.kind}'.")
+    # Not-a-number and infinite values are refused before anything runs: stored, they break every
+    # later answer that holds them. Checked here, not by the model, so the refusal never has to echo
+    # the value back (JSON cannot carry it).
+    for e in req.events:
+        for name in ("price", "qty"):
+            if not _finite(getattr(e, name)):
+                raise HTTPException(422, f"Event {e.id}: {name} is not a finite number.")
+    for a in req.annotations:
+        for k, val in a.fields.items():
+            if (isinstance(val, float) or (k in NUMBER_FIELDS and not _empty(val) and _num(val) is not None))                     and not _finite(val):
+                raise HTTPException(422, f"Annotation {a.id}: {k} is not a finite number.")
+    for t in req.transactions:
+        items = t.get("transferItems") if isinstance(t, dict) else None
+        for item in items if isinstance(items, list) else []:
+            for key in ("amount", "price", "cost"):
+                if isinstance(item, dict) and not _finite(item.get(key)):
+                    raise HTTPException(422, f"Transaction {t.get('activityId')}: {key} is not a finite number.")
+    by_id: dict[str, str] = {}
+    for t in req.transactions:
+        if t.get("activityId") is None:
+            continue
+        aid, h = str(t["activityId"]), _hash(t)
+        if by_id.setdefault(aid, h) != h:
+            raise HTTPException(422, f"Transaction {aid} appears twice with different contents.")
     for a in req.annotations:
         unknown = set(a.fields) - set(FIELDS)
         if unknown:
@@ -385,13 +446,53 @@ def _validate(conn, req: SyncRequest) -> None:
                 raise HTTPException(422, f"Unknown tag type '{t}'.")
 
 
+def _keep_known_legs(execs: list[dict], kept: list[dict], seen: dict, plan: Plan) -> list[dict]:
+    """A vertical whose leg an earlier sync already stored on its own (it saw that leg before the other
+    one was listed) stays as single legs, so the stored leg is recognised and not booked again."""
+    by_key = {}
+    for t in kept:
+        for i in range(max(1, len(sa._legs(t)))):
+            try:
+                by_key[sa.fill_key(t, i)] = t
+            except sa.AdapterError:
+                pass
+    out = []
+    for ex in execs:
+        mk = _fill_keys_of(ex)[0]
+        known = [seen.get(fk) for fk in ex["_fill_keys"]]
+        if not ex.get("option_strike2") or not any(
+                k and k["status"] in ("new", "already", "covered") and k["match_key"] != mk for k in known):
+            out.append(ex)
+            continue
+        txns = [by_key[fk] for fk in ex["_fill_keys"] if fk in by_key]
+        legs, problems = sa.transactions_to_executions(txns[:1])
+        for t in txns[1:]:
+            more, more_problems = sa.transactions_to_executions([t])
+            legs += more
+            problems += more_problems
+        plan.problems.extend(problems)
+        out.extend(legs)
+        plan.problems.append({"activityId": ex["_fill_keys"][0],
+                              "reason": f"{ex['ticker']} {ex['option_strike']:g}/{ex['option_strike2']:g} "
+                                        f"{ex['option_type'].lower()} vertical on {ex['iso_date']} kept as separate "
+                                        f"legs: an earlier sync already stored one leg on its own"})
+    return out
+
+
 def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
     excluded = {s.strip().upper() for s in req.exclude_symbols if s.strip()}
     seen = {r["fill_key"]: dict(r) for r in conn.execute("SELECT * FROM sync_fills")}
     kept, payload_by_key, busted = [], {}, []
+    once: set = set()
     for t in req.transactions:
         if t.get("type") != "TRADE":
             continue
+        if t.get("activityId") is not None:
+            # Overlapping pages repeat a transaction: the same one counts once (_validate refused
+            # two different transactions under one id).
+            if str(t["activityId"]) in once:
+                continue
+            once.add(str(t["activityId"]))
         sym = sa.symbol_of(t)
         if sym and any(sym == x or (x.startswith("/") and sym.startswith(x)) for x in excluded):
             plan.fills["excluded"] += len(sa._legs(t)) or 1
@@ -416,6 +517,7 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             payload_by_key[fk] = _hash(t)
     execs, problems = sa.transactions_to_executions(kept)
     plan.problems.extend(problems)
+    execs = _keep_known_legs(execs, kept, seen, plan)
 
     # A pick for an account that no longer exists falls back to the route and is reported, so an old
     # pick can never block every sync.
@@ -424,10 +526,18 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
     for acct in sorted(set(req.account_overrides.values()) - accounts):
         plan.problems.append({"reason": f"a trade was picked for journal account {acct}, which no longer exists; "
                                         f"its fills go to their default account"})
-    stored = StoredFills(conn, set(req.dedup_accounts) | set(req.routes.values()) | set(picks.values()))
+    synced = Counter((r["account_id"], r["match_key"]) for r in seen.values()
+                     if r["status"] in ("new", "already") and r["lead_key"] in (None, r["fill_key"]))
+    stored = StoredFills(conn, set(req.dedup_accounts) | set(req.routes.values()) | set(picks.values()), synced)
+    in_request = {fk for ex in execs for fk in ex["_fill_keys"]}
+    for r in seen.values():
+        # A fill an earlier sync found covered by a merged statement fill keeps its share of it.
+        if (r["status"] == "covered" and r["qty"] and r["lead_key"] in (None, r["fill_key"])
+                and r["fill_key"] not in in_request):
+            stored.consume(r["agg_key"], r["account_id"], float(r["qty"]))
 
     candidates = []
-    records = []   # (fill_keys, account, match_key, agg_key, status)
+    records = []   # (fill_keys, account, match_key, agg_key, status, qty)
     for ex in execs:
         account = next((picks[fk] for fk in ex["_fill_keys"] if fk in picks),
                        req.routes.get(ex["instrument_type"]))
@@ -446,7 +556,7 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
         hit = stored.take_exact(mk)
         if hit:
             plan.fills["already"] += 1
-            records.append((ex["_fill_keys"], hit[0], mk, ak, "already"))
+            records.append((ex["_fill_keys"], hit[0], mk, ak, "already", ex["qty"]))
         elif all(p and p["status"] in ("new", "already") for p in prevs):
             # Synced before and no longer in the journal: the trader deleted or edited it there.
             plan.fills["removed_in_journal"] += 1
@@ -470,15 +580,20 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             avail = sum(i[2] for i in left)
             if avail + 1e-9 >= qty:
                 need = qty
+                owners = set()
                 for i in left:
                     use = min(i[2], need)
+                    if use > 0:
+                        owners.add(i[0])
                     i[2] -= use
                     need -= use
                     if need <= 1e-9:
                         break
                 left = [i for i in left if i[2] > 1e-9]
                 plan.fills["covered"] += 1
-                records.append((ex["_fill_keys"], account, mk, ak2, "covered"))
+                # The account holding the statement fill, not the route; none when it spans accounts.
+                owner = next(iter(owners)) if len(owners) == 1 else None
+                records.append((ex["_fill_keys"], owner, mk, ak2, "covered", ex["qty"]))
             elif avail > 1e-9:
                 for i in left:
                     i[2] = 0.0
@@ -491,13 +606,15 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             else:
                 plan.fills["new"] += 1
                 new_by_account[account].append(ex)
-                records.append((ex["_fill_keys"], account, mk, ak2, "new"))
+                records.append((ex["_fill_keys"], account, mk, ak2, "new", ex["qty"]))
 
     for account, fills in new_by_account.items():
         keys_of = defaultdict(list)       # exact execution key -> the new fills' keys, so the preview can name them
         for f in fills:
             keys_of[_fill_keys_of(f)[0]].extend(f["_fill_keys"])
         clean = [{k: v for k, v in f.items() if not k.startswith("_")} for f in fills]
+        before = {r["trade_group"]: r["executions"] for r in conn.execute(
+            "SELECT trade_group, executions FROM trades WHERE account_id=?", (account,))}
         trades, _ = build_trades_from_executions(clean, account, conn, commit=False, dedup=False)
         replace_regrouped_trades(conn, account, trades)
         taken: set = set()
@@ -523,15 +640,32 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
                                 "date": t["date"], "instrument_type": t["instrument_type"], "side": t["side"],
                                 "status": "updated" if existed or t.get("replaces") else "new",
                                 "net_pnl": t["net_pnl"], "fill_keys": fks})
+        # The builder also closes a stored open vertical in place (no built trade for it): every trade
+        # this Apply changes is in the preview.
+        listed = {t["trade_group"] for t in trades}
+        for r in conn.execute("SELECT * FROM trades WHERE account_id=?", (account,)).fetchall():
+            if r["trade_group"] in listed or before.get(r["trade_group"]) == r["executions"]:
+                continue
+            try:
+                execs = json.loads(r["executions"] or "[]")
+            except ValueError:
+                execs = []
+            args = _row_args(r)
+            fks = sorted({fk for e in execs for fk in keys_of.get(_stored_keys(args, e)[0], [])})
+            plan.trades.append({"account_id": account, "trade_group": r["trade_group"], "ticker": r["ticker"],
+                                "date": r["date"], "instrument_type": r["instrument_type"], "side": r["side"],
+                                "status": "updated" if r["trade_group"] in before else "new",
+                                "net_pnl": r["net_pnl"], "fill_keys": fks})
 
-    for keys, account, mk, ak, status in records:
+    for keys, account, mk, ak, status, qty in records:
         for fk in keys:
             conn.execute("""
-                INSERT INTO sync_fills (fill_key, account_id, match_key, agg_key, status, payload_hash)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO sync_fills (fill_key, account_id, match_key, agg_key, status, payload_hash, qty, lead_key)
+                VALUES (?,?,?,?,?,?,?,?)
                 ON CONFLICT(fill_key) DO UPDATE SET account_id=excluded.account_id, match_key=excluded.match_key,
-                    agg_key=excluded.agg_key, payload_hash=excluded.payload_hash, last_synced=datetime('now')
-            """, (fk, account, mk, ak, status, payload_by_key.get(fk, "")))
+                    agg_key=excluded.agg_key, payload_hash=excluded.payload_hash, qty=excluded.qty,
+                    lead_key=excluded.lead_key, last_synced=datetime('now')
+            """, (fk, account, mk, ak, status, payload_by_key.get(fk, ""), qty, keys[0]))
     for fk, _prev in busted:
         conn.execute("UPDATE sync_fills SET status='busted', last_synced=datetime('now') WHERE fill_key=?", (fk,))
 
@@ -819,6 +953,27 @@ def run_sync(conn, req: SyncRequest) -> dict:
     return out
 
 
+# Every table the plan reads or writes. Any change to them between a preview and its Apply refuses the
+# Apply (409), whatever the summary shows.
+STATE_TABLES = ("accounts", "trades", "trade_analysis", "trade_tags", "diary_entries", "library_aliases",
+                "sync_fills", "sync_annotations", "sync_field_state", "sync_tags", "trade_events", "sync_day_notes")
+
+
+def _state_digest(conn) -> str:
+    h = hashlib.sha256()
+    for table in STATE_TABLES:
+        h.update(f"\n#{table}\n".encode())
+        for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+            h.update(repr(tuple(row)).encode())
+            h.update(b"\n")
+    return h.hexdigest()
+
+
+def _request_digest(req: SyncRequest) -> str:
+    """The request as sent, without dry_run and state_token: Apply must send exactly the preview's."""
+    return _hash(req.model_dump(mode="json", exclude={"dry_run", "state_token"}))
+
+
 def _backup(conn) -> str:
     db = Path(DB_PATH)
     folder = db.resolve().parent / "sync-backups"
@@ -961,20 +1116,31 @@ def sync_info():
             "fields": list(FIELDS), "tag_types": list(TAG_TYPES), "event_kinds": list(EVENT_KINDS)}
 
 
+def _from_a_browser(request: Request) -> bool:
+    """Edge Trader posts from its own server (urllib: no Origin, no Sec-Fetch headers). A web page
+    always sends Origin on a POST, so any page, even one served from localhost, is turned away."""
+    site = request.headers.get("sec-fetch-site")
+    return request.headers.get("origin") is not None or (site is not None and site != "none")
+
+
 @router.post("/edge-trader")
-def sync_edge_trader(req: SyncRequest, conn: sqlite3.Connection = Depends(_connection)):
+def sync_edge_trader(req: SyncRequest, request: Request, conn: sqlite3.Connection = Depends(_connection)):
+    if _from_a_browser(request):
+        raise HTTPException(403, "The sync accepts requests from Edge Trader's server only, not from a web page.")
     if not req.dry_run and not req.state_token:
         raise HTTPException(422, "Apply needs the state_token of a preview (send dry_run true first).")
+    request_digest = _request_digest(req)
 
     def attempt():
         conn.execute("BEGIN IMMEDIATE")
         try:
-            result = run_sync(conn, req)
+            state = _state_digest(conn)
+            result = run_sync(conn, req.model_copy(deep=True))
         except Exception:
             conn.rollback()
             raise
         targets = result.pop("_feedback_targets")
-        return result, targets, _hash(result)
+        return result, targets, _hash({"request": request_digest, "state": state, "result": result})
 
     with IMPORT_LOCK:
         result, targets, token = attempt()

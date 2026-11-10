@@ -156,7 +156,8 @@ notes you wrote during it, its stop and target changes, and your day note.
 `http://127.0.0.1:8010` (the same for the setup-script and Docker installs; use your own port if you
 changed `JOURNAL_API_PORT`) and pick a journal account for each instrument. Edge Trader's own server
 sends the sync, not your browser, so no CORS or network settings change: the journal keeps listening on
-this computer only.
+this computer only. For the same reason the journal refuses a sync request that comes from a web page
+(one that carries an `Origin` header), even a page served from this computer.
 
 The endpoint is `POST /api/sync/edge-trader` (`dry_run: true` returns the preview and a `state_token`;
 Apply sends the same request with `dry_run: false` and that token), with `GET /api/sync/info` for the

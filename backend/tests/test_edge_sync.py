@@ -246,11 +246,28 @@ def test_an_earlier_round_trip_imported_later_moves_the_timeline_with_its_trade(
     assert [e["id"] for e in tl["events"]] == ["e1"]
 
 
-def test_fill_moved_to_another_account_is_not_added_again(client):
+def test_a_fill_imported_into_another_account_is_not_added_again(client):
     import_csv(client, DAY_CSV, account="2")
     out = apply(client, transactions=DAY)
     assert out["fills"] == {"already": 2}
     assert q(client, "SELECT COUNT(*) n FROM trades WHERE account_id=1")[0]["n"] == 0
+
+
+def test_a_synced_trade_moved_to_another_account_is_not_added_again(client):
+    """L9: sync, move the trade in Trade View, sync again: no duplicate, and its picks and timeline
+    follow it to the new account."""
+    ev = [{"id": "e1", "annotation_id": "a1", "ts": "2026-11-04T15:00:30Z", "kind": "stop_set", "price": 199.0}]
+    apply(client, transactions=DAY, annotations=[ANN], events=ev)
+    (t,) = q(client, "SELECT id FROM trades")
+    assert client.patch(f"/api/trades/{t['id']}/account", json={"account_id": 2}).status_code == 200
+    out = apply(client, transactions=DAY, annotations=[ANN], events=ev)
+    assert out["fills"] == {"already": 2} and out["trades"] == []
+    assert [(r["account_id"], r["trade_group"]) for r in q(client, "SELECT account_id, trade_group FROM trades")] ==         [(2, GROUP)]
+    (ann,) = out["annotations"]
+    assert ann["status"] == "ok" and ann["trades"] == [{"account_id": 2, "trade_group": GROUP}]
+    assert {f["status"] for f in ann["fields"]} == {"same"}
+    tl = client.get("/api/sync/trade-events", params={"trade_group": GROUP, "account_id": 2}).json()
+    assert [e["id"] for e in tl["events"]] == ["e1"]
 
 
 def test_statement_fill_that_merged_two_schwab_fills_covers_them(client):
@@ -715,3 +732,164 @@ def test_a_pick_for_a_deleted_account_falls_back_to_the_route(client):
     pre = sync(client, transactions=DAY, account_overrides={"1001": 99, "1002": 99}).json()
     assert pre["trades"][0]["account_id"] == 1
     assert any("account 99" in p["reason"] for p in pre["problems"])
+
+
+# ── Audit findings (independent review of the port) ────────────────────────────
+
+def test_a_later_fill_at_a_synced_price_is_new_not_covered(client):
+    """H1: a fill an earlier sync stored is one Schwab fill; it never covers a later fill at the
+    same price that day, even when the earlier one is not in this request."""
+    first = stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=3001)
+    later = stock("2026-11-04T16:00:00+0000", "AMD", 100, 150.0, aid=3002)
+    apply(client, transactions=[first])
+    out = apply(client, transactions=[later])
+    assert out["fills"] == {"new": 1}
+    bought = sum(e["qty"] for t in q(client, "SELECT executions FROM trades")
+                 for e in json.loads(t["executions"]) if e["action"] == "BOT")
+    assert bought == 200
+
+
+def test_a_fill_an_earlier_sync_found_covered_keeps_its_share(client):
+    """H1: a merged statement fill covers each Schwab fill once, across syncs: a later fill at the
+    same price that day is new, even when the covered ones are not in this request."""
+    import_csv(client, ['11/4/26,10:00:00,TRD,="1",BOT +200 AMD @150.00,,,"-30,000.00","1"'])
+    two = [stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=3101),
+           stock("2026-11-04T15:00:01+0000", "AMD", 100, 150.0, aid=3102)]
+    assert apply(client, transactions=two)["fills"] == {"covered": 2}
+    later = stock("2026-11-04T18:00:00+0000", "AMD", 100, 150.0, aid=3103)
+    assert apply(client, transactions=[later])["fills"] == {"new": 1}
+    assert apply(client, transactions=two + [later])["fills"] == {"covered": 2, "already": 1}
+
+
+def test_apply_with_a_changed_day_note_is_refused(client):
+    """H2: the token binds the request, not only the summary of what it does."""
+    note = {"date": "2026-11-04", "account_id": 1, "text": "Plan A"}
+    token = sync(client, day_notes=[note]).json()["state_token"]
+    r = sync(client, False, state_token=token, day_notes=[{**note, "text": "Plan B"}])
+    assert r.status_code == 409
+    assert q(client, "SELECT COUNT(*) n FROM diary_entries")[0]["n"] == 0
+
+
+def test_apply_with_a_changed_event_is_refused(client):
+    ev = [{"id": "e1", "annotation_id": "a1", "ts": "2026-11-04T15:00:30Z", "kind": "stop_set", "price": 199.0}]
+    token = sync(client, transactions=DAY, annotations=[ANN], events=ev).json()["state_token"]
+    moved = [{**ev[0], "price": 150.0}]
+    r = sync(client, False, state_token=token, transactions=DAY, annotations=[ANN], events=moved)
+    assert r.status_code == 409 and q(client, "SELECT COUNT(*) n FROM trades")[0]["n"] == 0
+
+
+def test_a_journal_change_between_preview_and_apply_is_refused(client):
+    """H2: an edit the plan reads (another sync rewrote an event) invalidates the preview."""
+    ev = [{"id": "e1", "annotation_id": "a1", "ts": "2026-11-04T15:00:30Z", "kind": "stop_set", "price": 199.0}]
+    apply(client, transactions=DAY, annotations=[ANN], events=ev)
+    token = sync(client, transactions=DAY, annotations=[ANN], events=ev).json()["state_token"]
+    conn = sqlite3.connect(client.db)
+    conn.execute("UPDATE trade_events SET text='changed elsewhere'")
+    conn.commit()
+    conn.close()
+    r = sync(client, False, state_token=token, transactions=DAY, annotations=[ANN], events=ev)
+    assert r.status_code == 409
+
+
+def test_a_vertical_closed_by_the_sync_is_in_the_preview(client):
+    """H2: a stored open vertical the sync closes in place is listed among the changed trades."""
+    opened = vertical("2026-11-04T15:13:02+0000", -1, 2.40, 1.10, 11, (31, 32))
+    apply(client, transactions=opened)
+    closed = opened + vertical("2026-11-04T15:18:26+0000", 1, 1.95, 0.80, 12, (33, 34))
+    pre = sync(client, transactions=closed).json()
+    assert pre["fills"] == {"already": 1, "new": 1}
+    (t,) = pre["trades"]
+    assert t["status"] == "updated" and t["net_pnl"] == 15.0 and t["fill_keys"] == ["33", "34"]
+
+
+def test_repeated_transactions_in_one_request_count_once(client):
+    """H3: overlapping pages may repeat a transaction; it is booked once."""
+    out = apply(client, transactions=[DAY[0], DAY[0], DAY[1], DAY[1]])
+    assert out["fills"] == {"new": 2}
+    (t,) = q(client, "SELECT net_pnl, executions FROM trades")
+    assert t["net_pnl"] == 99.5 and len(json.loads(t["executions"])) == 2
+
+
+def test_conflicting_duplicate_ids_are_refused(client):
+    other = {**DAY[1], "transferItems": [{**DAY[1]["transferItems"][-1], "price": 205.0}]}
+    r = client.post("/api/sync/edge-trader", json={**BASE, "transactions": [DAY[0], DAY[1], other]})
+    assert r.status_code == 422 and "1002" in r.text
+
+
+def test_a_leg_synced_alone_is_not_booked_again_inside_a_vertical(client):
+    """H4: the first sync saw only one leg of a vertical; the next one sees both."""
+    legs = vertical("2026-11-04T15:13:02+0000", -1, 2.40, 1.10, 21, (41, 42))
+    apply(client, transactions=[legs[0]])
+    out = apply(client, transactions=legs)
+    assert out["fills"] == {"already": 1, "new": 1}
+    rows = q(client, "SELECT trade_group, executions FROM trades ORDER BY trade_group")
+    assert sum(len(json.loads(t["executions"])) for t in rows) == 2
+    assert not any("600-595" in t["trade_group"] for t in rows)
+    assert any("kept as separate legs" in p["reason"] for p in out["problems"])
+    assert apply(client, transactions=legs)["fills"] == {"already": 2}
+
+
+def test_execution_edits_wait_for_a_sync_in_progress(client):
+    """H5: an execution edit reads, changes and rewrites the whole fill list; it holds the same lock
+    as a sync, so it can never write back a list read before the sync committed."""
+    import threading
+    import trade_store
+    apply(client, transactions=DAY)
+    (t,) = q(client, "SELECT id FROM trades")
+    done = threading.Event()
+
+    def edit():
+        client.post(f"/api/trades/{t['id']}/executions",
+                    json={"action": "BOT", "qty": 1, "price": 200.0, "date": "2026-11-04", "time": "10:30:00"})
+        done.set()
+    with trade_store.IMPORT_LOCK:
+        th = threading.Thread(target=edit)
+        th.start()
+        assert not done.wait(0.5)
+    th.join(5)
+    assert done.is_set()
+
+
+def test_browser_requests_to_the_sync_are_refused(client):
+    """H6: Edge Trader posts server to server with no Origin; a page in a browser always sends one."""
+    for headers in ({"Origin": "http://localhost:5173"}, {"Sec-Fetch-Site": "same-site"},
+                    {"Origin": "null"}):
+        r = client.post("/api/sync/edge-trader", json={**BASE, "transactions": DAY}, headers=headers)
+        assert r.status_code == 403, headers
+    r = client.post("/api/sync/edge-trader", json={**BASE, "transactions": DAY}, headers={"Sec-Fetch-Site": "none"})
+    assert r.status_code == 200
+    assert q(client, "SELECT COUNT(*) n FROM trades")[0]["n"] == 0
+    # The journal's own pages still read the timeline and the version check.
+    page = {"Origin": "http://localhost:3010"}
+    assert client.get("/api/sync/info", headers=page).status_code == 200
+    assert client.get("/api/sync/trade-events", params={"trade_group": GROUP, "account_id": 1},
+                      headers=page).status_code == 200
+
+
+def test_covered_fills_belong_to_the_account_holding_the_statement_fill(client):
+    """M7: a merged statement fill in account 2 covers fills routed to account 1; the annotation
+    finds the trade in account 2."""
+    import_csv(client, ['11/4/26,10:00:00,TRD,="1",BOT +200 AMD @150.00,,,"-30,000.00","1"'], account="2")
+    two = [stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=5001),
+           stock("2026-11-04T15:00:01+0000", "AMD", 100, 150.0, aid=5002)]
+    out = apply(client, transactions=two, annotations=[{"id": "t5001", "fill_keys": ["5001", "5002"],
+                                                        "fields": {"strategy": "Opening Range"}}])
+    assert out["fills"] == {"covered": 2}
+    (ann,) = out["annotations"]
+    assert ann["status"] == "ok" and ann["trades"][0]["account_id"] == 2
+    assert {r["account_id"] for r in q(client, "SELECT account_id FROM sync_fills")} == {2}
+
+
+@pytest.mark.parametrize("body", [
+    {"events": [{"id": "x", "annotation_id": "a1", "ts": "2026-11-04T15:00:00Z", "kind": "stop_set", "price": "Infinity"}]},
+    {"events": [{"id": "x", "annotation_id": "a1", "ts": "2026-11-04T15:00:00Z", "kind": "stop_set", "qty": "NaN"}]},
+    {"annotations": [{"id": "a1", "fill_keys": ["1001"], "fields": {"stop_loss": "Infinity"}}]},
+    {"annotations": [{"id": "a1", "fill_keys": ["1001"], "fields": {"r_multiple": float("nan")}}]},
+    {"transactions": [{**DAY[0], "transferItems": [{**DAY[0]["transferItems"][0], "price": "NaN"}]}]},
+    {"transactions": [{**DAY[0], "transferItems": [{**DAY[0]["transferItems"][0], "amount": float("inf")}]}]},
+])
+def test_non_finite_numbers_are_refused(client, body):
+    """M8: Infinity and NaN are refused before anything runs (they would break later answers)."""
+    payload = json.dumps({**BASE, "transactions": DAY, "annotations": [ANN], **body})   # NaN as Python writes it
+    r = client.post("/api/sync/edge-trader", content=payload, headers={"Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
