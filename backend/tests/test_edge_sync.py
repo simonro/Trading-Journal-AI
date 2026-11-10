@@ -829,25 +829,146 @@ def test_a_leg_synced_alone_is_not_booked_again_inside_a_vertical(client):
     assert apply(client, transactions=legs)["fills"] == {"already": 2}
 
 
-def test_execution_edits_wait_for_a_sync_in_progress(client):
-    """H5: an execution edit reads, changes and rewrites the whole fill list; it holds the same lock
-    as a sync, so it can never write back a list read before the sync committed."""
+def _while_locked(fn, during=None):
+    """Run fn (an HTTP call) in a thread while the test holds the import lock; it must wait for it.
+    `during` runs in the test's thread with the lock held (a sync committing meanwhile)."""
     import threading
     import trade_store
+    out = {}
+
+    def run():
+        out["r"] = fn()
+    with trade_store.IMPORT_LOCK:
+        th = threading.Thread(target=run)
+        th.start()
+        th.join(0.5)
+        assert th.is_alive(), "the request did not wait for the lock"
+        if during:
+            during()
+    th.join(10)
+    assert not th.is_alive()
+    return out["r"]
+
+
+def _executions(client):
+    (t,) = q(client, "SELECT executions FROM trades")
+    return [(e["time"], e["action"], e["qty"], e["price"]) for e in json.loads(t["executions"])]
+
+
+@pytest.mark.parametrize("change", ["add", "update", "delete"])
+def test_execution_edits_wait_for_a_sync_in_progress(client, change):
+    """H5: an execution edit reads, changes and rewrites the whole fill list; it holds the same lock
+    as a sync, then succeeds on the list as it is once the lock is free."""
     apply(client, transactions=DAY)
     (t,) = q(client, "SELECT id FROM trades")
-    done = threading.Event()
+    fill = {"action": "BOT", "qty": 1, "price": 200.5, "date": "2026-11-04", "time": "10:30:00"}
+    call = {"add": lambda: client.post(f"/api/trades/{t['id']}/executions", json=fill),
+            "update": lambda: client.put(f"/api/trades/{t['id']}/executions/0", json={**fill, "time": "10:00:00", "qty": 100}),
+            "delete": lambda: client.delete(f"/api/trades/{t['id']}/executions/1")}[change]
+    r = _while_locked(call)
+    assert r.status_code == 200, r.text
+    expected = {"add": [("10:00:00", "BOT", 100, 200.0), ("10:05:00", "SOLD", 100, 201.0), ("10:30:00", "BOT", 1, 200.5)],
+                "update": [("10:00:00", "BOT", 100, 200.5), ("10:05:00", "SOLD", 100, 201.0)],
+                "delete": [("10:00:00", "BOT", 100, 200.0)]}[change]
+    assert sorted(_executions(client)) == expected
 
-    def edit():
-        client.post(f"/api/trades/{t['id']}/executions",
-                    json={"action": "BOT", "qty": 1, "price": 200.0, "date": "2026-11-04", "time": "10:30:00"})
-        done.set()
-    with trade_store.IMPORT_LOCK:
-        th = threading.Thread(target=edit)
-        th.start()
-        assert not done.wait(0.5)
-    th.join(5)
-    assert done.is_set()
+
+def test_an_execution_edit_keeps_a_close_a_sync_committed_while_it_waited(client):
+    """H5: the edit waits while a sync adds the trade's closing fill, then writes on top of it."""
+    import edge_sync
+    import database
+    apply(client, transactions=DAY[:1])
+    (t,) = q(client, "SELECT id FROM trades")
+
+    def sync_the_close():
+        conn = database.get_db()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            edge_sync.run_sync(conn, edge_sync.SyncRequest(**{**BASE, "transactions": DAY}))
+            conn.commit()
+        finally:
+            conn.close()
+    r = _while_locked(lambda: client.post(f"/api/trades/{t['id']}/executions", json={
+        "action": "BOT", "qty": 1, "price": 200.5, "date": "2026-11-04", "time": "10:30:00"}), during=sync_the_close)
+    assert r.status_code == 200, r.text
+    assert sorted(_executions(client)) == [("10:00:00", "BOT", 100, 200.0), ("10:05:00", "SOLD", 100, 201.0),
+                                           ("10:30:00", "BOT", 1, 200.5)]
+
+
+OLD_SYNC_FILLS = """CREATE TABLE sync_fills (
+    fill_key TEXT PRIMARY KEY, account_id INTEGER, match_key TEXT NOT NULL, agg_key TEXT NOT NULL,
+    status TEXT NOT NULL, payload_hash TEXT NOT NULL,
+    first_synced TEXT NOT NULL DEFAULT (datetime('now')), last_synced TEXT NOT NULL DEFAULT (datetime('now')))"""
+
+
+def test_an_upgraded_database_never_lets_an_old_covered_pool_cover_a_new_fill(client):
+    """Pass 2, high 1: rows covered before qty and lead_key existed have an unknown share of the
+    merged statement fill. After the upgrade a later fill at that price is added as new and named."""
+    import edge_sync
+    import_csv(client, ['11/4/26,10:00:00,TRD,="1",BOT +200 AMD @150.00,,,"-30,000.00","1"'])
+    two = [stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=7001),
+           stock("2026-11-04T15:00:01+0000", "AMD", 100, 150.0, aid=7002)]
+    assert apply(client, transactions=two)["fills"] == {"covered": 2}
+    apply(client, transactions=DAY)          # one new and stored fill per row too
+    # Rewrite the bookkeeping the way a journal before this version kept it, then upgrade it.
+    conn = sqlite3.connect(client.db)
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute("SELECT * FROM sync_fills")]
+    conn.execute("DROP TABLE sync_fills")
+    conn.execute(OLD_SYNC_FILLS)
+    for r in rows:
+        conn.execute("INSERT INTO sync_fills (fill_key, account_id, match_key, agg_key, status, payload_hash) "
+                     "VALUES (?,?,?,?,?,?)", (r["fill_key"], r["account_id"], r["match_key"], r["agg_key"],
+                                              r["status"], r["payload_hash"]))
+    conn.commit()
+    edge_sync.init_sync_tables(conn)
+    upgraded = {r["fill_key"]: dict(r) for r in conn.execute("SELECT * FROM sync_fills")}
+    conn.close()
+    assert upgraded["1001"]["qty"] == 100 and upgraded["1001"]["lead_key"] == "1001"
+    assert upgraded["7001"]["qty"] is None and upgraded["7001"]["lead_key"] is None
+
+    later = stock("2026-11-04T18:00:00+0000", "AMD", 100, 150.0, aid=7003)
+    out = apply(client, transactions=[later])
+    assert out["fills"] == {"new": 1}
+    assert any("added as new" in p["reason"] for p in out["problems"])
+    assert apply(client, transactions=two + [later])["fills"] == {"covered": 2, "already": 1}
+    bought = sum(e["qty"] for t in q(client, "SELECT executions FROM trades WHERE ticker='AMD'")
+                 for e in json.loads(t["executions"]) if e["action"] == "BOT")
+    assert bought == 300
+
+
+def test_a_moved_trade_never_covers_a_later_fill_in_its_new_account(client):
+    """Pass 2, high 2: sync, move the trade in Trade View, then sync only a later fill at the same
+    price: the moved fill is still a synced fill, so the later one is new."""
+    first = stock("2026-11-04T15:00:00+0000", "AMD", 100, 150.0, aid=8001)
+    apply(client, transactions=[first])
+    (t,) = q(client, "SELECT id FROM trades")
+    assert client.patch(f"/api/trades/{t['id']}/account", json={"account_id": 2}).status_code == 200
+    assert {r["account_id"] for r in q(client, "SELECT account_id FROM sync_fills")} == {2}
+    later = stock("2026-11-04T17:00:00+0000", "AMD", 100, 150.0, aid=8002)
+    assert apply(client, transactions=[later])["fills"] == {"new": 1}
+    bought = sum(e["qty"] for t in q(client, "SELECT executions FROM trades")
+                 for e in json.loads(t["executions"]) if e["action"] == "BOT")
+    assert bought == 200
+
+
+def test_a_vertical_held_as_legs_closes_leg_by_leg(client):
+    """Pass 2, high 3: a vertical kept as single legs (one leg was synced alone) is closed by a later
+    closing vertical leg by leg: both positions go flat with their own realized P&L."""
+    opening = vertical("2026-11-04T15:13:02+0000", -1, 2.40, 1.10, 61, (51, 52))
+    closing = vertical("2026-11-04T15:40:00+0000", 1, 1.95, 0.80, 62, (53, 54))
+    apply(client, transactions=[opening[0]])
+    apply(client, transactions=opening)
+    out = apply(client, transactions=opening + closing)
+    assert out["fills"] == {"already": 2, "new": 2}
+    assert any("single-leg positions" in p["reason"] for p in out["problems"])
+    rows = q(client, "SELECT trade_group, option_strike, side, net_pnl, executions FROM trades ORDER BY option_strike")
+    assert [(r["option_strike"], r["side"], r["net_pnl"]) for r in rows] == [(595.0, "LONG", -30.0), (600.0, "SHORT", 45.0)]
+    for r in rows:
+        execs = json.loads(r["executions"])
+        assert len(execs) == 2 and sum(e["qty"] * (1 if e["action"] == "BOT" else -1) for e in execs) == 0
+    assert not any("600-595" in r["trade_group"] for r in rows)
+    assert apply(client, transactions=opening + closing)["fills"] == {"already": 4}
 
 
 def test_browser_requests_to_the_sync_are_refused(client):

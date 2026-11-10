@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import schwab_adapter as sa
 import update_check
-from csv_parser import _contract_id, _vertical_second_strike, build_trades_from_executions
+from csv_parser import _contract_id, _is_vertical_group, _vertical_second_strike, build_trades_from_executions
 from database import DB_PATH, get_db, row_to_dict
 from library import TAG_TYPES
 from trade_store import IMPORT_LOCK, free_name, insert_trade, rebuilt_names, replace_regrouped_trades
@@ -139,12 +139,42 @@ def init_sync_tables(conn: sqlite3.Connection) -> None:
     for col, kind in (("qty", "REAL"), ("lead_key", "TEXT")):
         if col not in fill_cols:
             conn.execute(f"ALTER TABLE sync_fills ADD COLUMN {col} {kind}")
+    _backfill_sync_fills(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(diary_entries)")}
     if "source" not in cols:
         conn.execute("ALTER TABLE diary_entries ADD COLUMN source TEXT")
     if "updated_at" not in cols:
         conn.execute("ALTER TABLE diary_entries ADD COLUMN updated_at TEXT")
     conn.commit()
+
+
+def _backfill_sync_fills(conn) -> None:
+    """Rows synced before qty and lead_key existed. A new or already-stored row is one Schwab fill:
+    its qty is read back from the exact key (second-to-last part) and it leads itself (for a
+    vertical's two rows that counts the execution twice where it is recorded as synced, which only
+    keeps it out of the merged-fill pool, never lets it cover another fill). A covered row's share of
+    a merged statement fill cannot be recovered: it stays unknown, and _sync_fills never lets that
+    day's merged pool cover a new fill."""
+    for fill_key, match_key in conn.execute("SELECT fill_key, match_key FROM sync_fills WHERE status IN "
+                                            "('new', 'already') AND (qty IS NULL OR lead_key IS NULL)").fetchall():
+        try:
+            qty = float(match_key.split("|")[-2])
+        except (ValueError, IndexError):
+            qty = None
+        conn.execute("UPDATE sync_fills SET qty=COALESCE(qty, ?), lead_key=COALESCE(lead_key, ?) WHERE fill_key=?",
+                     (qty, fill_key, fill_key))
+
+
+def move_fills(conn, src: int, dst: int, executions_json: str, trade_row) -> None:
+    """A trade moved to another account: the sync's record of its fills moves with it, so they keep
+    counting as synced fills there (never as a merged statement fill that could cover a later fill)."""
+    try:
+        execs = json.loads(executions_json or "[]")
+    except ValueError:
+        return
+    keys = {_key_of_stored(trade_row, e) for e in execs}
+    for k in keys:
+        conn.execute("UPDATE sync_fills SET account_id=? WHERE account_id=? AND match_key=?", (dst, src, k))
 
 
 def forget_trade(conn, account_id: int, trade_group: str) -> None:
@@ -446,9 +476,35 @@ def _validate(conn, req: SyncRequest) -> None:
                 raise HTTPException(422, f"Unknown tag type '{t}'.")
 
 
-def _keep_known_legs(execs: list[dict], kept: list[dict], seen: dict, plan: Plan) -> list[dict]:
-    """A vertical whose leg an earlier sync already stored on its own (it saw that leg before the other
-    one was listed) stays as single legs, so the stored leg is recognised and not booked again."""
+def _open_single_legs(conn, accounts, ex) -> bool:
+    """Does the journal hold an open single-leg position in either contract of this vertical?"""
+    ids = sorted(set(accounts))
+    if not ids:
+        return False
+    rows = conn.execute(
+        f"SELECT trade_group, option_strike, executions FROM trades WHERE account_id IN ({','.join('?' * len(ids))}) "
+        f"AND instrument_type='OPTION' AND ticker=? AND option_expiry=? AND option_type=?",
+        (*ids, ex["ticker"], ex["option_expiry"], ex["option_type"])).fetchall()
+    for r in rows:
+        if _is_vertical_group(r["trade_group"]) or r["option_strike"] is None:
+            continue
+        if not any(abs(float(r["option_strike"]) - float(k)) < 1e-9 for k in (ex["option_strike"], ex["option_strike2"])):
+            continue
+        try:
+            execs = json.loads(r["executions"] or "[]")
+        except ValueError:
+            continue
+        held = sum((e.get("qty", 0) or 0) * (1 if e.get("action") == "BOT" else -1) for e in execs)
+        if abs(held) > 1e-6:
+            return True
+    return False
+
+
+def _keep_known_legs(conn, accounts, execs: list[dict], kept: list[dict], seen: dict, plan: Plan) -> list[dict]:
+    """A vertical stays as single legs when an earlier sync already stored one of its legs on its own
+    (it saw that leg before the other one was listed), so the stored leg is recognised and not booked
+    again, and when the journal holds either contract as an open single-leg position, so a closing
+    vertical closes those legs instead of opening a vertical beside them."""
     by_key = {}
     for t in kept:
         for i in range(max(1, len(sa._legs(t)))):
@@ -460,8 +516,14 @@ def _keep_known_legs(execs: list[dict], kept: list[dict], seen: dict, plan: Plan
     for ex in execs:
         mk = _fill_keys_of(ex)[0]
         known = [seen.get(fk) for fk in ex["_fill_keys"]]
-        if not ex.get("option_strike2") or not any(
-                k and k["status"] in ("new", "already", "covered") and k["match_key"] != mk for k in known):
+        if not ex.get("option_strike2"):
+            out.append(ex)
+            continue
+        if any(k and k["status"] in ("new", "already", "covered") and k["match_key"] != mk for k in known):
+            why = "an earlier sync already stored one leg on its own"
+        elif _open_single_legs(conn, accounts, ex):
+            why = "the journal holds its contracts as single-leg positions"
+        else:
             out.append(ex)
             continue
         txns = [by_key[fk] for fk in ex["_fill_keys"] if fk in by_key]
@@ -475,7 +537,7 @@ def _keep_known_legs(execs: list[dict], kept: list[dict], seen: dict, plan: Plan
         plan.problems.append({"activityId": ex["_fill_keys"][0],
                               "reason": f"{ex['ticker']} {ex['option_strike']:g}/{ex['option_strike2']:g} "
                                         f"{ex['option_type'].lower()} vertical on {ex['iso_date']} kept as separate "
-                                        f"legs: an earlier sync already stored one leg on its own"})
+                                        f"legs: {why}"})
     return out
 
 
@@ -517,7 +579,8 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             payload_by_key[fk] = _hash(t)
     execs, problems = sa.transactions_to_executions(kept)
     plan.problems.extend(problems)
-    execs = _keep_known_legs(execs, kept, seen, plan)
+    execs = _keep_known_legs(conn, set(req.dedup_accounts) | set(req.routes.values())
+                             | set(req.account_overrides.values()), execs, kept, seen, plan)
 
     # A pick for an account that no longer exists falls back to the route and is reported, so an old
     # pick can never block every sync.
@@ -572,11 +635,30 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
     by_agg = defaultdict(list)
     for c in candidates:
         by_agg[c[3]].append(c)
+    # Covered by a merged statement fill in a sync before this version: how much of it they used is
+    # unknown, so that day's merged pool covers no new fill (each is added as new and named).
+    unknown = {r["agg_key"] for r in seen.values() if r["status"] == "covered" and r["fill_key"] not in in_request
+               and (r["qty"] is None or r["lead_key"] is None)}
     new_by_account = defaultdict(list)
     for ak, group in by_agg.items():
         left = stored.leftover(ak)
         for ex, account, mk, ak2 in sorted(group, key=lambda c: (c[0]["iso_date"], c[0]["time"])):
             qty = float(ex["qty"])
+            if ak in unknown:
+                prevs = [seen.get(fk) for fk in ex["_fill_keys"]]
+                if all(p and p["status"] == "covered" for p in prevs):
+                    plan.fills["covered"] += 1
+                    records.append((ex["_fill_keys"], prevs[0]["account_id"], mk, ak2, "covered", ex["qty"]))
+                    continue
+                plan.fills["new"] += 1
+                new_by_account[account].append(ex)
+                records.append((ex["_fill_keys"], account, mk, ak2, "new", ex["qty"]))
+                plan.problems.append({"activityId": ex["_fill_keys"][0],
+                                      "reason": f"{ex['ticker']} {ex['action']} {ex['qty']} @ {ex['price']} on "
+                                                f"{ex['iso_date']} {ex['time']} added as new: a merged statement fill "
+                                                f"at this price was matched by an older sync, so how much of it is "
+                                                f"left is unknown. Check this day in the journal for a duplicate."})
+                continue
             avail = sum(i[2] for i in left)
             if avail + 1e-9 >= qty:
                 need = qty
@@ -668,6 +750,10 @@ def _sync_fills(conn, req: SyncRequest, plan: Plan) -> None:
             """, (fk, account, mk, ak, status, payload_by_key.get(fk, ""), qty, keys[0]))
     for fk, _prev in busted:
         conn.execute("UPDATE sync_fills SET status='busted', last_synced=datetime('now') WHERE fill_key=?", (fk,))
+
+
+def _key_of_stored(row, e) -> str:
+    return _stored_keys(_row_args(row), e)[0]
 
 
 class TradeIndex:

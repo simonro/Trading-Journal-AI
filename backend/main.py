@@ -1011,6 +1011,7 @@ def _move_trade(conn, trade_id: int, dst: int):
             cleared += conn.execute(f"DELETE FROM {table} WHERE trade_group=? AND account_id=?",
                                     (group, dst)).rowcount
         edge_sync.forget_trade(conn, src, group)
+        edge_sync.move_fills(conn, src, dst, trade['executions'], row)
         conn.execute("UPDATE trade_analysis SET diary_entry_id=NULL WHERE trade_group=? AND account_id=?",
                      (group, src))
         for table in ("trade_analysis", "trade_tags"):
