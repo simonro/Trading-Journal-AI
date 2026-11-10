@@ -1174,7 +1174,8 @@ def parse_thinkorswim_csv(content: str, account_id: int, conn=None, import_tz: s
     return build_trades_from_executions(all_executions, account_id, conn)
 
 
-def build_trades_from_executions(all_executions: list[dict], account_id: int, conn=None) -> tuple[list[dict], int]:
+def build_trades_from_executions(all_executions: list[dict], account_id: int, conn=None, *,
+                                 commit: bool = True, dedup: bool = True) -> tuple[list[dict], int]:
     """
     Broker-agnostic half of the import pipeline. Takes execution dicts in the
     common shape (action BOT/SOLD, qty, ticker, price, instrument_type, option_*,
@@ -1184,13 +1185,17 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
     positions already stored, grouping by position open/close cycles, and
     aggregating each group into a trade row. Every broker parser ends here so
     grouping and dedup behave identically regardless of the CSV format.
+
+    commit=False leaves the caller's transaction open (the Edge Trader sync runs a whole
+    Apply, or a dry run it rolls back, in one transaction). dedup=False skips the
+    per-account duplicate check for a caller that already removed known fills itself.
     """
     if not all_executions:
         return [], 0
 
     # DB-level dedup only — never dedupe within same file (Thinkorswim legitimately
     # emits identical time/price/qty fills for large split orders)
-    existing_fps = get_existing_fingerprints(conn, account_id) if conn else Counter()
+    existing_fps = get_existing_fingerprints(conn, account_id) if (conn and dedup) else Counter()
     skipped = 0
     unique_executions = []
     for exec_dict in all_executions:
@@ -1267,7 +1272,8 @@ def build_trades_from_executions(all_executions: list[dict], account_id: int, co
                  new_date, tg, account_id)
             )
 
-        conn.commit()
+        if commit:
+            conn.commit()
         unique_executions = remaining
 
     replaced: set[str] = set()
