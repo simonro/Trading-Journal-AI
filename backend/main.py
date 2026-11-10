@@ -1833,7 +1833,7 @@ def get_reports(
 
     sql = """
         SELECT t.id, t.account_id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
-               t.instrument_type, t.executions, t.setup, t.setup_grade,
+               t.instrument_type, t.option_type, t.executions, t.setup, t.setup_grade,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.idea_source
@@ -1990,7 +1990,9 @@ def get_reports(
                              ['A++', 'A+', 'A', 'B', 'C', 'D', 'F']),
         "by_strategy": _bucket_stats(raw, lambda r: r['strategy']),
         "by_symbol": _bucket_stats(raw, lambda r: r['ticker'])[:40],
-        "by_side": _bucket_stats(raw, lambda r: r['side']),
+        # Direction, not opening action: short puts and put credit spreads count as long.
+        "by_side": _bucket_stats(raw, leaks.trade_direction,
+                                 lambda k: {'LONG': 'Long / bullish', 'SHORT': 'Short / bearish'}.get(k, k)),
         "by_instrument": _bucket_stats(raw, lambda r: r['instrument_type']),
         "by_management": _bucket_stats(raw, management_bucket),
         "by_emotion": _bucket_stats(raw, lambda r: r['emotional_state']),
@@ -2009,7 +2011,7 @@ _leak_explain_lock = threading.Lock()
 def _leak_rows(conn, account_id, date_from, date_to):
     sql = """
         SELECT t.id, t.account_id, t.trade_group, t.ticker, t.side, t.date, t.net_pnl,
-               t.gross_pnl, t.commissions, t.instrument_type, t.executions, t.setup,
+               t.gross_pnl, t.commissions, t.instrument_type, t.option_type, t.executions, t.setup,
                t.mfe_pct, t.mae_pct, t.exit_efficiency,
                ta.strategy, ta.emotional_state, ta.idea_source
         FROM trades t

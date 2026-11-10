@@ -8,7 +8,7 @@ import { sideInfo, sideLabel } from '../sideLabel';
    names the buckets in plain words and lays them out. A leak only uses what was known when
    the trade was entered, so skipping it is something you could actually have done. */
 
-const SIDE = { LONG: 'Long trades', SHORT: 'Short trades' };
+const SIDE = { LONG: 'Long / bullish trades', SHORT: 'Short / bearish trades' };
 const INSTRUMENT = { FUTURE: 'Futures', STOCK: 'Stocks', OPTION: 'Options' };
 const WEEKDAY = { Mon: 'Mondays', Tue: 'Tuesdays', Wed: 'Wednesdays', Thu: 'Thursdays', Fri: 'Fridays', Sat: 'Saturdays', Sun: 'Sundays' };
 const TRADE_NO = {
