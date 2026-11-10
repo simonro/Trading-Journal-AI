@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { exitlabApi } from '../../api';
 import { errorText, Notice } from './shared';
 
-const AUTO_LABELS = { A: 'Flush Reclaim (A)', B: 'Leader Long (B)', B_LITE: 'Leader Long Lite (B_LITE)', C: 'Laggard Short (C)', NONE: 'No setup' };
+const AUTO_LABELS = { A: 'Setup A', B: 'Setup B', C: 'Setup C', NONE: 'No setup' };
 export const autoSetupLabel = name => AUTO_LABELS[name] || name;
 const labelOf = item => item.group === 'auto' ? autoSetupLabel(item.name) : item.name;
 const keyOf = item => JSON.stringify([item.group, item.name]);

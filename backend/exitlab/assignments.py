@@ -3,8 +3,8 @@ import json
 from collections import Counter
 
 AUTO_LABELS = {
-    "A": "Flush Reclaim (A)", "B": "Leader Long (B)",
-    "B_LITE": "Leader Long Lite (B_LITE)", "C": "Laggard Short (C)",
+    "A": "Setup A", "B": "Setup B",
+    "C": "Setup C",
     "NONE": "No setup",
 }
 
