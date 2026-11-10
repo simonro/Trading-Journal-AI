@@ -905,39 +905,44 @@ def _parse_exec_body(body: dict, fallback_date: str, previous: dict | None = Non
 
 @app.post("/api/trades/{trade_id}/executions")
 def add_execution(trade_id: int, body: dict, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    execs.append(_parse_exec_body(body, trade['date']))
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    # Reads, changes and rewrites the whole fill list: under the import lock, so a sync or import
+    # committing in between can never be overwritten by a list read before it.
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        execs.append(_parse_exec_body(body, trade['date']))
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.put("/api/trades/{trade_id}/executions/{exec_idx}")
 def update_execution(trade_id: int, exec_idx: int, body: dict, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    if exec_idx < 0 or exec_idx >= len(execs):
-        raise HTTPException(status_code=404, detail="Execution index out of range")
-    execs[exec_idx] = _parse_exec_body(body, trade['date'], execs[exec_idx] if 0 <= exec_idx < len(execs) else None)
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        if exec_idx < 0 or exec_idx >= len(execs):
+            raise HTTPException(status_code=404, detail="Execution index out of range")
+        execs[exec_idx] = _parse_exec_body(body, trade['date'], execs[exec_idx] if 0 <= exec_idx < len(execs) else None)
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.delete("/api/trades/{trade_id}/executions/{exec_idx}")
 def delete_execution(trade_id: int, exec_idx: int, conn: sqlite3.Connection = Depends(get_connection)):
-    row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trade not found")
-    trade = row_to_dict(row)
-    execs = json.loads(trade.get('executions') or '[]')
-    if exec_idx < 0 or exec_idx >= len(execs):
-        raise HTTPException(status_code=404, detail="Execution index out of range")
-    execs.pop(exec_idx)
-    return _recalculate_and_save(trade, execs, conn, trade_id)
+    with IMPORT_LOCK:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        trade = row_to_dict(row)
+        execs = json.loads(trade.get('executions') or '[]')
+        if exec_idx < 0 or exec_idx >= len(execs):
+            raise HTTPException(status_code=404, detail="Execution index out of range")
+        execs.pop(exec_idx)
+        return _recalculate_and_save(trade, execs, conn, trade_id)
 
 
 @app.delete("/api/trades/{trade_id}")
