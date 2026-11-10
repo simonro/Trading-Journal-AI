@@ -628,7 +628,8 @@ async function openTrade() {
   await renderApp();
   fireEvent.click(within(nav()).getByRole('button', { name: 'Trade View' }));
   await waitFor(() => expect(tradesApi.list).toHaveBeenCalled());
-  fireEvent.click((await screen.findAllByText('TSLA'))[0].closest('tr'));
+  // The click on the ticker reaches its row.
+  fireEvent.click((await screen.findAllByText('TSLA'))[0]);
   return screen.findByRole('region', { name: 'Timeline' });
 }
 
@@ -639,8 +640,10 @@ test('Trade Details lists the Edge Trader timeline in US Eastern time, and a cli
   expect(await within(timeline).findByText('Held the level')).toBeInTheDocument();
   expect(within(timeline).getByText('Stop set')).toBeInTheDocument();
   expect(within(timeline).getByText('09:55:00')).toBeInTheDocument();
-  expect(within(timeline).getAllByRole('listitem')).toHaveLength(3);
-  const row = within(timeline).getByText('Stop moved to').closest('li');
+  const rows = within(timeline).getAllByRole('listitem');
+  expect(rows).toHaveLength(3);
+  const row = rows[1];
+  expect(row).toHaveTextContent('Stop moved to 366.09');
   fireEvent.click(row);
   expect(row).toHaveAttribute('aria-current', 'true');
   fireEvent.click(row);
