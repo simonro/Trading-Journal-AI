@@ -252,6 +252,22 @@ def _tags(kind):
     return fn
 
 
+def trade_direction(r):
+    """LONG or SHORT as market direction, not as the opening action.
+
+    Stocks and futures keep their side. Options use their bias: a sold put or put credit
+    spread is stored SHORT but is a bullish trade, so it counts as LONG here (and a bought
+    put or a sold call as SHORT). The stored side is untouched; fill matching needs it.
+    """
+    side = str(r.get('side') or '').upper()
+    if side not in ('LONG', 'SHORT'):
+        return r.get('side') or None
+    opt = str(r.get('option_type') or '').upper()
+    if str(r.get('instrument_type') or '').upper() == 'OPTION' and opt in ('PUT', 'CALL'):
+        return 'LONG' if (opt == 'CALL') == (side == 'LONG') else 'SHORT'
+    return side
+
+
 # (id, label shown in the UI, bucket function). A function may return a list (tags).
 DIMENSIONS = [
     ('entry_window', 'Entry time', session_bucket),
@@ -261,7 +277,7 @@ DIMENSIONS = [
     ('day_state', 'How the day stood', _day_state),
     ('size', 'Size', _size),
     ('instrument', 'Instrument', lambda r: r.get('instrument_type')),
-    ('side', 'Side', lambda r: r.get('side')),
+    ('side', 'Direction', trade_direction),
     ('weekday', 'Day of week', lambda r: None if r.get('dow') is None else _DOW[r['dow']]),
     ('setup', 'Setup', lambda r: r.get('setup_label')),
     ('strategy', 'Strategy', lambda r: r.get('strategy') or None),

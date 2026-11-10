@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { tradesApi } from '../api';
 import { ChevronRight } from 'lucide-react';
 import TradeActions from './TradeActions';
+import { sideInfo, sideLabel } from '../sideLabel';
 
 const signed$ = (v) => {
   if (v == null) return '-';
@@ -221,8 +222,6 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
     );
   }
 
-  const side = (trade.side || '').toUpperCase();
-
   return (
     <>
       <tr
@@ -246,8 +245,8 @@ export default function TradeRow({ trade, openTime, onOpenDetail, customSetups =
             {trade.instrument_type}
           </span>
         </td>
-        <td className="text-muted">
-          {side === 'LONG' ? 'Long' : side === 'SHORT' ? 'Short' : trade.side}
+        <td className="text-muted" title={sideInfo(trade).title}>
+          {sideLabel(trade)}
         </td>
         <td className={`num ${pnlTone}`} style={{ fontWeight: 600 }}>{signed$(pnl)}</td>
         <td onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>

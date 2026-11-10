@@ -439,8 +439,8 @@ export default function Reports({ accountId, onOpenDetail, initial }) {
                 <Section title="By Instrument">
                   <Breakdown view={view} rows={data.by_instrument} labelHead="Type" sortByPnl />
                 </Section>
-                <Section title="Long vs Short">
-                  <Breakdown view={view} rows={data.by_side} labelHead="Side" sortByPnl />
+                <Section title="Bullish vs Bearish">
+                  <Breakdown view={view} rows={data.by_side} labelHead="Direction" sortByPnl />
                 </Section>
               </div>
             </>
