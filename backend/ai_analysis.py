@@ -7,6 +7,24 @@ from pathlib import Path
 from dotenv import load_dotenv
 from database import in_marks
 
+
+def side_for_ai(t) -> str:
+    """The trade's side as the model should read it.
+
+    The stored side is the opening action (LONG = bought to open, SHORT = sold to open). For
+    options that says nothing about direction: a bought put is a bearish trade and a sold put
+    or put credit spread a bullish one. Options therefore get the market view spelled out,
+    e.g. "LONG (bought put, bearish)". Stocks and futures keep the plain side.
+    """
+    side = str(t.get('side') or '').upper()
+    kind = str(t.get('option_type') or '').upper()
+    if (str(t.get('instrument_type') or '').upper() != 'OPTION'
+            or kind not in ('PUT', 'CALL') or side not in ('LONG', 'SHORT')):
+        return t.get('side') or ''
+    bullish = (kind == 'CALL') == (side == 'LONG')
+    action = 'bought' if side == 'LONG' else 'sold'
+    return f"{side} ({action} {kind.lower()}, {'bullish' if bullish else 'bearish'})"
+
 load_dotenv()
 
 MODEL = "claude-opus-5-5"
@@ -223,7 +241,7 @@ def analyze_diary_entry(image_path: str, entry_date: str, trades_context: list[d
     for t in trades_context:
         line = (
             f"- trade_group: {t['trade_group']} | ticker: {t['ticker']} | "
-            f"instrument: {t['instrument_type']} | side: {t['side']} | "
+            f"instrument: {t['instrument_type']} | side: {side_for_ai(t)} | "
             f"avg_entry: ${t.get('avg_entry', 'N/A')} | avg_exit: ${t.get('avg_exit', 'N/A')} | "
             f"first_entry_time: {t.get('first_entry_time', 'N/A')} | "
             f"last_exit_time: {t.get('last_exit_time', 'N/A')} | "
@@ -283,7 +301,7 @@ def analyze_diary_text(text_content: str, entry_date: str, trades_context: list[
     for t in trades_context:
         line = (
             f"- trade_group: {t['trade_group']} | ticker: {t['ticker']} | "
-            f"side: {t['side']} | avg_entry: ${t.get('avg_entry', 'N/A')} | "
+            f"side: {side_for_ai(t)} | avg_entry: ${t.get('avg_entry', 'N/A')} | "
             f"avg_exit: ${t.get('avg_exit', 'N/A')} | "
             f"first_entry_time: {t.get('first_entry_time', 'N/A')} | "
             f"net_pnl: ${t.get('net_pnl', 0):.2f}"
@@ -472,6 +490,7 @@ def build_trades_context(conn, entry_date: str, account_id: int) -> list[dict]:
             'ticker': trade['ticker'],
             'instrument_type': trade['instrument_type'],
             'side': trade['side'],
+            'option_type': trade.get('option_type'),
             'avg_entry': avg_entry,
             'avg_exit': avg_exit,
             'first_entry_time': first_entry_time,
@@ -537,7 +556,7 @@ def build_brain_context(conn, account_id) -> str:
     account_id is a list of account ids, or None for all accounts."""
     ids = account_id or []
     rows = conn.execute(f"""
-        SELECT t.date, t.ticker, t.side, t.instrument_type, t.net_pnl, t.gross_pnl,
+        SELECT t.date, t.ticker, t.side, t.instrument_type, t.option_type, t.net_pnl, t.gross_pnl,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.stop_loss, ta.target_price
         FROM trades t
@@ -584,7 +603,7 @@ def build_brain_context(conn, account_id) -> str:
 
     trade_lines = []
     for t in trades[:50]:
-        line = f"  {t['date']} | {t['ticker']} | {t['side']} | ${t['net_pnl']:.2f}"
+        line = f"  {t['date']} | {t['ticker']} | {side_for_ai(t)} | ${t['net_pnl']:.2f}"
         if t['strategy']:
             line += f" | {t['strategy']}"
         if t['r_multiple'] is not None:
@@ -678,7 +697,7 @@ def generate_weekly_summary(week_context: dict) -> dict:
         day_pnl = sum(t.get("net_pnl") or 0 for t in day_trades)
         lines = [f"--- {day} (${day_pnl:+.2f}, {len(day_trades)} trades) ---"]
         for t in day_trades:
-            line = f"  {t.get('ticker', '')} {t.get('side', '')} ${t.get('net_pnl') or 0:.2f}"
+            line = f"  {t.get('ticker', '')} {side_for_ai(t)} ${t.get('net_pnl') or 0:.2f}"
             if t.get("strategy"):
                 line += f" | {t['strategy']}"
             if t.get("r_multiple") is not None:

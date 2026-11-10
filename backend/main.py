@@ -2398,7 +2398,7 @@ def get_weekly_summary(
                 pass
 
     sql = """
-        SELECT t.trade_group, t.ticker, t.side, t.net_pnl, t.date,
+        SELECT t.trade_group, t.ticker, t.side, t.instrument_type, t.option_type, t.net_pnl, t.date,
                ta.strategy, ta.r_multiple, ta.emotional_state, ta.mistakes,
                ta.entry_reason, ta.exit_reason
         FROM trades t
