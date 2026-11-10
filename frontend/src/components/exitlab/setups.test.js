@@ -22,7 +22,7 @@ test('picker groups names, labels auto codes, shows zero counts and searches abo
   fireEvent.click(within(autos).getByRole('button', { name: 'Setup A 8 trades · 3 eligible' }));
   expect(change).toHaveBeenCalledWith([{ group: 'strategy', name: 'A' }, { group: 'auto', name: 'A' }]);
   expect(within(autos).getByText('UNKNOWN')).toBeVisible();
-  fireEvent.change(screen.getByLabelText('Search setups'), { target: { value: 'flush' } });
+  fireEvent.change(screen.getByLabelText('Search setups'), { target: { value: 'setup a' } });
   expect(within(strategies).queryAllByRole('button')).toHaveLength(0);
   expect(within(autos).getAllByRole('button')).toHaveLength(1);
   fireEvent.click(screen.getByRole('button', { name: 'All setups' }));
