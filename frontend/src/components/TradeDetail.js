@@ -59,7 +59,13 @@ export function computeStats(trade) {
   const totalQty = entryFills.reduce((s, f) => s + (f.qty || 0), 0);
   const multiplier = tradeMultiplier(trade, avgEntry, avgExit, totalQty);
   const adjustedCost = avgEntry ? avgEntry * totalQty * multiplier : null;
-  const netRoi = adjustedCost ? (trade.net_pnl / adjustedCost * 100) : null;
+  // ROI on futures notional says nothing about return on margin, so it is not shown.
+  const isFuture = (trade.instrument_type || '').toUpperCase() === 'FUTURE';
+  const netRoi = adjustedCost && !isFuture && trade.net_pnl != null ? (trade.net_pnl / adjustedCost * 100) : null;
+  // A cash-secured put ties up strike x 100 per contract.
+  const collateral = (trade.instrument_type || '').toUpperCase() === 'OPTION' && side === 'SHORT'
+    && trade.option_type === 'PUT' && trade.option_strike ? trade.option_strike * 100 * totalQty : null;
+  const collateralRoi = collateral && trade.net_pnl != null ? (trade.net_pnl / collateral * 100) : null;
 
   // Sort by full date+time (not time alone) so multi-day trades order correctly.
   const sortedExecs = [...execs]
@@ -102,7 +108,7 @@ export function computeStats(trade) {
   const isWin = (trade.net_pnl || 0) > 0;
 
   return {
-    multiplier, avgEntry, avgExit, totalQty, adjustedCost, netRoi, openTime, closeTime, openDate, closeDate, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
+    multiplier, avgEntry, avgExit, totalQty, adjustedCost, netRoi, collateral, collateralRoi, openTime, closeTime, openDate, closeDate, holdMinutes, fmtHold, isClosed, isWin, entryFills, exitFills };
 }
 
 // ── Stat row helper ────────────────────────────────────────────────────────────
@@ -738,9 +744,11 @@ export default function TradeDetail({ trade: initialTrade, tradeNavList = [], on
                 </div>
 
                 <StatRow label="Side" value={sideInfo(trade).mechanics ? `${sideLabel(trade)}, ${sideInfo(trade).mechanics.toLowerCase()}` : sideLabel(trade)} />
-                <StatRow label="Stocks traded" value={stats.totalQty || '—'} />
+                <StatRow label={(trade.instrument_type || 'STOCK').toUpperCase() === 'STOCK' ? 'Stocks traded' : 'Contracts traded'} value={stats.totalQty || '—'} />
                 <StatRow label="Commissions & Fees" value={trade.commissions ? fmt$(trade.commissions) : '—'} />
-                <StatRow label="Net ROI" value={stats.netRoi != null ? `${stats.netRoi >= 0 ? '+' : ''}${stats.netRoi.toFixed(2)}%` : '—'} valueColor={stats.netRoi != null ? (stats.netRoi >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
+                <StatRow label="Return on Collateral" value={stats.collateralRoi != null ? `${stats.collateralRoi >= 0 ? '+' : ''}${stats.collateralRoi.toFixed(2)}%` : '—'} valueColor={stats.collateralRoi != null ? (stats.collateralRoi >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
+                <StatRow label="Collateral" value={stats.collateral ? fmt$(stats.collateral) : '—'} />
+                <StatRow label={(trade.instrument_type || '').toUpperCase() === 'OPTION' && trade.side === 'SHORT' ? 'Net ROI (on premium)' : 'Net ROI'} value={stats.netRoi != null ? `${stats.netRoi >= 0 ? '+' : ''}${stats.netRoi.toFixed(2)}%` : '—'} valueColor={stats.netRoi != null ? (stats.netRoi >= 0 ? 'var(--green)' : 'var(--red)') : undefined} />
                 <StatRow label="Gross P&L" value={trade.gross_pnl != null ? fmt$(trade.gross_pnl) : '—'} valueColor={trade.gross_pnl >= 0 ? 'var(--green)' : 'var(--red)'} />
                 <StatRow label="Adjusted Cost" value={stats.adjustedCost ? fmt$(stats.adjustedCost) : '—'} />
                 <StatRow label="Average Entry" value={stats.avgEntry ? `$${stats.avgEntry.toFixed(2)}` : '—'} />
