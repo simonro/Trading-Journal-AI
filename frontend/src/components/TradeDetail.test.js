@@ -58,6 +58,17 @@ test('a closed future uses the point value it was booked with', () => {
   const s = computeStats({ side: 'SHORT', instrument_type: 'FUTURE', ticker: '/ESZ26', net_pnl: 100, gross_pnl: 100,
     executions: JSON.stringify([fill('SOLD', '2026-09-14', '09:35:00', 1, 6002), fill('BOT', '2026-09-14', '10:00:00', 1, 6000)]) });
   expect(s.multiplier).toBeCloseTo(50);
+  expect(s.netRoi).toBeNull();
+});
+
+test('a short put shows return on premium and on collateral', () => {
+  const s = computeStats({ side: 'SHORT', instrument_type: 'OPTION', option_type: 'PUT', option_strike: 165,
+    net_pnl: 185.67, gross_pnl: 187,
+    executions: JSON.stringify([fill('SOLD', '2026-11-10', '09:42:00', 1, 6.5), fill('BOT', '2026-11-11', '15:54:00', 1, 4.63)]) });
+  expect(s.adjustedCost).toBeCloseTo(650);
+  expect(s.netRoi).toBeCloseTo(28.56);
+  expect(s.collateral).toBe(16500);
+  expect(s.collateralRoi).toBeCloseTo(1.125);
 });
 
 test('a stock keeps a multiplier of 1', () => {
