@@ -566,6 +566,32 @@ def test_a_second_round_trip_never_overwrites_a_stored_vertical(client):
     assert any("kept apart" in p["reason"] for p in out["problems"])
 
 
+def tsm_close_in_two_parts():
+    """TSM 360/357.5 put credit spread closed as two partial fills: 4 transactions, one order, one second."""
+    t, o = "2026-11-17T17:59:21+0000", 136587
+    return [option(t, "TSM   261120P00360000", 1, 10.60, order=o, fees=0.66, aid=36),
+            option(t, "TSM   261120P00357500", -1, 8.95, order=o, fees=0.68, aid=37),
+            option(t, "TSM   261120P00360000", 1, 10.60, order=o, fees=0.66, aid=39),
+            option(t, "TSM   261120P00357500", -1, 8.95, order=o, fees=0.68, aid=40)]
+
+
+def test_vertical_filled_in_parts_pairs_leg_by_leg():
+    ex, _ = sa.transactions_to_executions(tsm_close_in_two_parts())
+    assert [(e["action"], e["qty"], e["price"], e["option_strike"], e["option_strike2"], e["_fill_keys"])
+            for e in ex] == [("BOT", 1, 1.65, 360.0, 357.5, ["36", "37"]),
+                             ("BOT", 1, 1.65, 360.0, 357.5, ["39", "40"])]
+
+
+def test_spread_opened_then_closed_in_parts_in_a_later_sync(client):
+    t, o = "2026-11-17T17:46:47+0000", 136582
+    opening = [option(t, "TSM   261120P00360000", -2, 10.10, order=o, fees=1.34, aid=21),
+               option(t, "TSM   261120P00357500", 2, 9.00, order=o, fees=1.34, aid=20)]
+    apply(client, transactions=opening)
+    apply(client, transactions=opening + tsm_close_in_two_parts())
+    (tr,) = q(client, "SELECT gross_pnl FROM trades")
+    assert tr["gross_pnl"] == -110.0
+
+
 def test_a_trade_edited_in_the_journal_is_not_overwritten(client):
     apply(client, transactions=DAY)
     conn = sqlite3.connect(client.db)
