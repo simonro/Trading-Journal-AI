@@ -180,6 +180,30 @@ def _vertical(a: dict, b: dict) -> dict | None:
     return fill
 
 
+def _vertical_pairs(rows: list[tuple], idxs: list[int]) -> list[tuple[int, int]]:
+    """Leg pairs of one order and second. Two fills are one vertical; a vertical filled in parts
+    arrives as several fills per leg (one per partial fill, legs alternating by activityId), and is
+    paired leg by leg in activityId order when it has exactly two contracts on opposite sides with
+    matching quantities. Anything else stays as single legs."""
+    if len(idxs) == 2:
+        return [(idxs[0], idxs[1])]
+    if len(idxs) < 4 or len(idxs) % 2:
+        return []
+    legs: dict[tuple, list[int]] = defaultdict(list)
+    for i in sorted(idxs, key=lambda i: rows[i][2]):
+        f = rows[i][3][0]
+        legs[(f["option_strike"], f["action"])].append(i)
+    if len(legs) != 2:
+        return []
+    (ka, a), (kb, b) = legs.items()
+    if ka[1] == kb[1] or len(a) != len(b):
+        return []
+    pairs = list(zip(a, b))
+    if any(rows[x][3][0]["qty"] != rows[y][3][0]["qty"] for x, y in pairs):
+        return []
+    return [(min(x, y), max(x, y)) for x, y in pairs]
+
+
 def transactions_to_executions(transactions: list[dict]) -> tuple[list[dict], list[dict]]:
     """Return (execution dicts in statement order, problems). Skips non-TRADE and non-VALID
     transactions. Problems are transactions it refused, each {activityId, reason}."""
@@ -213,12 +237,11 @@ def transactions_to_executions(transactions: list[dict]) -> tuple[list[dict], li
     merged: dict[int, dict] = {}
     dropped: set[int] = set()
     for idxs in by_order_second.values():
-        if len(idxs) != 2:
-            continue
-        v = _vertical(rows[idxs[0]][3][0], rows[idxs[1]][3][0])
-        if v:
-            merged[idxs[0]] = v
-            dropped.add(idxs[1])
+        for a, b in _vertical_pairs(rows, idxs):
+            v = _vertical(rows[a][3][0], rows[b][3][0])
+            if v:
+                merged[a] = v
+                dropped.add(b)
 
     out: list[dict] = []
     for idx, (_when, _oid, _aid, fills) in enumerate(rows):
