@@ -164,6 +164,27 @@ Apply sends the same request with `dry_run: false` and that token), with `GET /a
 version check. The code is `backend/edge_sync.py` and `backend/schwab_adapter.py`, tested in
 `backend/tests/test_edge_sync.py`.
 
+## Futures charts (optional, Schwab)
+
+Alpaca has no futures, so the trade chart for `/ES`, `/MES`, `/NQ`, `/MNQ` (and any other contract
+Schwab lists) reads **Schwab's price history** at the contract's real prices: the full Globex session
+for the trade's day (18:00 ET the evening before through 17:00 ET), 1-minute bars for about the last
+month and 5-minute bars for older days. A contract Schwab no longer serves (an expired `/ESU26`)
+charts its continuous root (`/ES`), with a note on the chart.
+
+To turn it on:
+
+1. `pip install schwabdev` in the backend's Python (it is optional, so it is not in `requirements.txt`).
+2. Give the journal your Schwab developer app keys in `backend/.env`: `SCHWAB_APP_KEY` and
+   `SCHWAB_APP_SECRET`, or `SCHWAB_ENV_FILE` pointing at another app's `.env` that has them.
+3. Sign in once with [Edge Trader for Schwab](https://github.com/simonro/edge-trader-for-schwab)'s
+   `login.bat` (or any schwabdev sign-in). The tokens live in `~/.schwabdev/tokens.db`
+   (`SCHWAB_TOKENS_DB` to move them) and are shared with Edge Trader.
+
+The journal only reads price history. It never signs in, never places orders and never opens a
+streamer. Without keys, or when the Schwab login has expired, the futures chart stays empty and
+says what to do. Stock and option charts keep using Alpaca.
+
 ## Privacy and your data
 
 Trading Journal AI is designed as a **local-first application**.
@@ -195,6 +216,12 @@ The core journal, trade reconstruction, P&L calculations, reports, and statistic
 
 If you add Alpaca keys, the trade chart and Exit Lab's **Load missing prices** and **Load prices** ask Alpaca for price bars:
 the ticker (plus SPY for Exit Lab) and the date range, nothing about your trades or account.
+
+**Futures charts (Schwab, only if you set it up)**
+
+With Schwab keys set, opening the chart of a futures trade asks Schwab's API (`api.schwabapi.com`)
+for price history: the contract symbol and the date range, signed with your Schwab login. Nothing
+about your trades, fills or account is sent. Without Schwab keys, futures charts contact nothing.
 
 **Update check (GitHub)**
 
@@ -514,9 +541,12 @@ Everything is optional; the app runs without any keys and tells you exactly whic
 | Variable | Enables |
 |---|---|
 | `ANTHROPIC_API_KEY` | Diary analysis, Day Review, Weekly Summary, Insights, and the Brain chat |
-| `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Intraday price charts on each trade and Exit Lab's historical minute prices (free Alpaca account works) |
+| `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | Intraday price charts on each stock and option trade and Exit Lab's historical minute prices (free Alpaca account works) |
 | `ALPACA_ENV_FILE` | Optional. Path to another `.env` file that holds the Alpaca keys for Exit Lab. When set, Exit Lab reads its keys only from that file. |
 | `ALPACA_DATA_FEED` | Optional, defaults to `iex` (free-tier data). Set to `sip` only if your key has a paid market-data subscription. |
+| `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET` | Optional. Futures charts at real contract prices from Schwab price history (also needs `pip install schwabdev`, see [Futures charts](#futures-charts-optional-schwab)) |
+| `SCHWAB_ENV_FILE` | Optional. Path to another `.env` (for example Edge Trader for Schwab's) to read the Schwab keys from, to share one Schwab login. |
+| `SCHWAB_TOKENS_DB` | Optional. Where schwabdev keeps the Schwab tokens. Default `~/.schwabdev/tokens.db`, shared with Edge Trader for Schwab. |
 | `FRONTEND_ORIGINS` | Optional. Any `localhost`/`127.0.0.1` port is already accepted; add comma-separated origins here only for a frontend served from another host. |
 | `UPDATE_CHECK` | Optional. `0` turns off the once-a-day check for a newer release on GitHub. |
 
