@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import json
@@ -41,6 +42,7 @@ from daily_summary import build_daily_context, generate_daily_summary
 from library import router as library_router, init_library_tables, apply_aliases, library_names
 from exitlab.api import router as exitlab_router
 import edge_sync
+import futures_chart
 import update_check
 
 load_dotenv()
@@ -1528,14 +1530,6 @@ ALPACA_SECRET = os.getenv("APCA_API_SECRET_KEY", "")
 # viewer's key is on. Override with ALPACA_DATA_FEED=sip if you have the subscription.
 ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
 
-FUTURES_CHART_MAP = {
-    '/ES': 'SPY', '/MES': 'SPY',
-    '/NQ': 'QQQ', '/MNQ': 'QQQ',
-    '/YM': 'DIA', '/MYM': 'DIA',
-    '/RTY': 'IWM', '/M2K': 'IWM',
-}
-
-
 ALLOWED_CHART_TIMEFRAMES = {
     "1Min", "3Min", "5Min", "10Min", "15Min", "30Min", "1Hour", "1Day", "1Week",
 }
@@ -1570,24 +1564,40 @@ async def _fetch_alpaca_bars(client, url, base_params, headers, max_bars=5000):
 _CHART_ET = ZoneInfo("America/New_York")
 
 
-@app.get("/api/chart/{ticker}/{date}")
+async def _futures_chart(ticker: str, date: str, timeframe: str, days_back: int) -> dict:
+    """Futures chart from Schwab price history at the contract's real prices (Alpaca has no futures)."""
+    tf = timeframe if timeframe in ALLOWED_CHART_TIMEFRAMES else "5Min"
+    cap = {"1Day": 3650, "1Week": 5475}.get(tf, 90)
+    try:
+        trade_day = datetime.strptime(date, "%Y-%m-%d").date()
+        start, end = futures_chart.window(trade_day, min(days_back, cap), tf)
+        bars, used = await asyncio.to_thread(futures_chart.bars, ticker, tf, start, end)
+    except futures_chart.ChartUnavailable as e:
+        return {"ticker": ticker, "date": date, "bars": [], "warning": str(e)}
+    except Exception as e:
+        return {"ticker": ticker, "date": date, "bars": [], "warning": f"Chart unavailable: {e}"}
+    out = {"ticker": used, "original_ticker": ticker, "date": date, "bars": bars, "source": "schwab"}
+    if used != ticker.upper():
+        out["warning"] = f"Schwab no longer serves {ticker}: showing the continuous {used} contract."
+    return out
+
+
+# `:path` so a futures contract ('/ESZ26', sent as %2FESZ26) still reaches this route.
+@app.get("/api/chart/{ticker:path}/{date}")
 async def get_chart(
     ticker: str, date: str,
     timeframe: str = Query("5Min"),
     days_back: int = Query(1, ge=1),
 ):
+    if futures_chart.is_future(ticker):
+        return await _futures_chart(ticker, date, timeframe, days_back)
     if not ALPACA_KEY or ALPACA_KEY == "your_alpaca_api_key_here":
         return {
             "ticker": ticker, "date": date, "bars": [],
             "warning": "Add APCA_API_KEY_ID and APCA_API_SECRET_KEY to backend/.env to enable price charts."
         }
 
-    # Normalize ticker
-    if ticker.upper().startswith('/'):
-        # Map futures to proxy ETF for charting
-        alpaca_ticker = FUTURES_CHART_MAP.get(ticker.upper(), 'SPY')
-    else:
-        alpaca_ticker = ticker.upper()
+    alpaca_ticker = ticker.upper()
 
     tf = timeframe if timeframe in ALLOWED_CHART_TIMEFRAMES else "5Min"
 
